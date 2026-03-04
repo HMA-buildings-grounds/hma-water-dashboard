@@ -1,11 +1,16 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from sqlalchemy import create_engine
-from io import BytesIO
 
-# --- PAGE CONFIG ---
+# --- CONFIG ---
 st.set_page_config(page_title="HMA Command Center", layout="wide")
+
+# --- UI LOGIC ---
+def get_who_target(pop):
+    """Sphere Handbook/WHO standard for high-service boarding: ~100 L/c/d"""
+    return 100 
 
 # --- DATA ENGINE ---
 @st.cache_data(ttl=600)
@@ -17,41 +22,52 @@ def load_data():
     df['log_date'] = pd.to_datetime(df['log_date'])
     df = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
     df['Distribution'] = df['booster_reading'].diff().fillna(0)
-    df['LPCD'] = (df['Distribution'] * 1000) / 370 # Base calc
+    df['Efficiency'] = (df['Distribution'] / df['well_usage_m3'].replace(0, np.nan)) * 100
     return df
 
 df = load_data()
 
-# --- HEADER & EXPORT ACTIONS ---
-col1, col2 = st.columns([3, 1])
-col1.title("💧 HMA Water Infrastructure Command Center")
-with col2:
-    # Logic for Excel/CSV Export
+# --- SIDEBAR: COMMAND CENTER ---
+with st.sidebar:
+    st.image("assets/HMA_logo_color.jpg", use_container_width=True)
+    st.markdown("## ⚙️ Command Center")
+    pop = st.number_input("Daily Campus Occupancy", 370, help="Total personnel on-site")
+    target_lpcd = st.slider("WHO Standard Target (L/c/d)", 50, 150, 100)
+    
+    st.divider()
+    st.markdown("### Data Export")
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Report Data", data=csv, file_name="HMA_Water_Report.csv", mime="text/csv")
+    st.download_button("Download CSV Dataset", csv, "hma_water_data.csv", "text/csv")
+    
+# --- MAIN DASHBOARD ---
+st.title("💧 Water Infrastructure Management")
 
-# --- GLOBAL FILTERS ---
-with st.expander("⚙️ System Filters & Population Calibration", expanded=True):
-    c1, c2, c3 = st.columns(3)
-    pop = c1.number_input("Actual Daily Campus Population", value=370, min_value=1)
-    date_range = c2.date_input("Analysis Window", [df['log_date'].min(), df['log_date'].max()])
-    target_lpcd = c3.select_slider("WHO Target LPCD (Modern Boarding)", options=[50, 75, 100, 150], value=100)
-
-# --- KPI RIBBON ---
-filtered = df[(df['log_date'].dt.date >= date_range[0]) & (df['log_date'].dt.date <= date_range[1])]
-latest = filtered.iloc[-1]
-actual_lpcd = (latest['Distribution'] * 1000) / pop
-
+# KPI GRID
+curr = df.iloc[-1]
+lpcd = (curr['Distribution'] * 1000) / pop
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Production", f"{latest['well_usage_m3']:.1f} m³")
-c2.metric("Efficiency", f"{(latest['Distribution']/latest['well_usage_m3'])*100:.1f}%")
-c3.metric("Actual LPCD", f"{actual_lpcd:.0f} L", delta=f"{actual_lpcd - target_lpcd:.0f} vs Target", delta_color="inverse")
-c4.metric("Status", "OPTIMAL" if actual_lpcd <= target_lpcd else "CRITICAL")
+c1.metric("Production", f"{curr['well_usage_m3']:.1f} m³")
+c2.metric("Efficiency", f"{curr['Efficiency']:.1f}%")
+c3.metric("Per Capita (L/c/d)", f"{lpcd:.0f}", delta=f"{lpcd-target_lpcd:.1f} vs WHO Target")
+c4.metric("Water Loss", f"{curr['well_usage_m3'] - curr['Distribution']:.1f} m³")
 
-# --- CHARTS ---
-fig = go.Figure()
-fig.add_trace(go.Bar(x=filtered['log_date'], y=filtered['well_usage_m3'], name="Well Source", marker_color="#1B263B"))
-fig.add_trace(go.Scatter(x=filtered['log_date'], y=filtered['Distribution'], name="Distribution", line=dict(color="#A68A64", width=3)))
-fig.add_hline(y=(target_lpcd * pop) / 1000, line_dash="dash", line_color="#941B0C", annotation_text="WHO Target Threshold")
-fig.update_layout(template="plotly_white", hovermode="x unified", height=400)
-st.plotly_chart(fig, use_container_width=True)
+# DIAGNOSTICS (THE COMMANDER)
+st.markdown("---")
+col_a, col_b = st.columns([3, 1])
+with col_a:
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=df['log_date'], y=df['well_usage_m3'], name="Production", marker_color="#1B263B"))
+    fig.add_trace(go.Scatter(x=df['log_date'], y=df['Distribution'], name="Distribution", line=dict(color="#A68A64", width=3)))
+    fig.update_layout(height=400, template="plotly_white", hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+
+with col_b:
+    st.subheader("Diagnostics")
+    if lpcd > target_lpcd: st.error("🚨 OVER CONSUMPTION: Per capita usage exceeds WHO boarding school benchmarks.")
+    else: st.success("✅ CONSUMPTION: Within international compliance standards.")
+    
+    # Efficiency Gauge
+    fig_g = go.Figure(go.Indicator(mode="gauge+number", value=curr['Efficiency'], 
+                                   gauge={'axis': {'range': [0, 100]}, 'bar': {'color': "#1B263B"}}))
+    fig_g.update_layout(height=250)
+    st.plotly_chart(fig_g, use_container_width=True)
