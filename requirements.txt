@@ -4,5 +4,4 @@ plotly
 st-gsheets-connection
 xlsxwriter
 openpyxl
-google-api-python-client
-google-auth
+requests
