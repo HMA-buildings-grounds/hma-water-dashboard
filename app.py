@@ -2,89 +2,73 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from sqlalchemy import create_engine
+import io
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="HMA Water Intelligence", layout="wide", page_icon="💧")
+# --- PAGE SETUP ---
+st.set_page_config(page_title="HMA Infrastructure Command", layout="wide")
 
-# --- TYPE-SAFE STATE INITIALIZATION ---
-if 'pop' not in st.session_state:
-    st.session_state.pop = 370
-if 'target_lpd' not in st.session_state:
-    st.session_state.target_lpd = 75
-
-# --- ENTERPRISE CSS ---
+# --- CSS: SCADA-Inspired Industrial Aesthetic ---
 st.markdown("""
     <style>
-    .stApp {background-color: #F8FAFC;}
-    .metric-card {background: white; padding: 20px; border-radius: 12px; border: 1px solid #E2E8F0; box-shadow: 0 4px 6px rgba(0,0,0,0.05);}
-    h1 {color: #1B263B; font-weight: 800;}
+    .kpi-card {background: #ffffff; border-radius: 6px; padding: 15px; border-left: 4px solid #1B263B; box-shadow: 0 2px 4px rgba(0,0,0,0.1);}
+    .header-band {background: #1B263B; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px;}
+    .stApp {background-color: #F8F9FA;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- MOCK DATA ENGINE (Replace with your actual SQL load_data) ---
-@st.cache_data
-def get_data():
-    dates = pd.date_range(start="2026-01-01", periods=30)
-    df = pd.DataFrame({
-        'log_date': dates,
-        'well_usage_m3': np.random.uniform(60, 110, 30),
-        'Distribution': np.random.uniform(50, 95, 30)
-    })
-    df['Efficiency'] = (df['Distribution'] / df['well_usage_m3']) * 100
+# --- DATA ENGINE ---
+@st.cache_data(ttl=600)
+def load_data():
+    c = st.secrets["connections"]["mysql"]
+    engine = create_engine(f"mysql+pymysql://{c['username']}:{c['password']}@{c['host']}:{c['port']}/{c['database']}",
+                           connect_args={"ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}})
+    df = pd.read_sql("SELECT log_date, well_usage_m3, booster_reading FROM water_logs ORDER BY log_date ASC", engine)
+    df['log_date'] = pd.to_datetime(df['log_date'])
+    df = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
+    df['Distribution'] = df['booster_reading'].diff().fillna(0)
+    df['LPCD'] = (df['Distribution'] * 1000) / 370 # Dynamic calc
     return df
 
-df = get_data()
+df = load_data()
 
-# --- SIDEBAR: OPERATIONAL CONTROLS ---
-with st.sidebar:
-    st.markdown("## ⚙️ Control Center")
-    
-    # TYPE-SAFE INPUTS
-    st.number_input("Campus Population", value=int(st.session_state.pop), step=1, format="%d", key="pop")
-    st.number_input("WHO Target (L/c/d)", value=int(st.session_state.target_lpd), step=1, format="%d", key="target_lpd")
-    
-    st.divider()
-    
+# --- TOP NAVIGATION BAR ---
+header_col1, header_col2, header_col3 = st.columns([2, 1, 1])
+with header_col1: st.title("💧 HMA Infrastructure Command")
+with header_col2: pop = st.number_input("Campus Occupancy", 370, 1000)
+with header_col3:
     # EXPORT MODULE
     csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Export Data (CSV)", csv, "water_usage_report.csv", "text/csv")
-    
-    st.markdown("### Compliance Links")
-    st.markdown("• [WHO Guidelines](https://www.who.int/publications/i/item/9789241549950)")
+    st.download_button("📥 Export CSV", csv, "HMA_Water_Data.csv", "text/csv")
 
-# --- MAIN UI ---
-st.title("💧 Water Infrastructure Executive Report")
+# --- ANALYTICAL DASHBOARD ---
+# WHO/Sphere Standard for Boarding Schools: ~100L per person per day
+WHO_BASELINE = 100 
 
-# KPI CALCULATIONS
+# Metric calculation with dynamic population
 latest = df.iloc[-1]
-prod = latest['well_usage_m3']
-dist = latest['Distribution']
-eff = latest['Efficiency']
-per_capita = (dist * 1000) / st.session_state.pop
+current_lpcd = (latest['Distribution'] * 1000) / pop
 
-# KPI ROW
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Well Production", f"{prod:.1f} m³")
-c2.metric("Efficiency", f"{eff:.1f}%", delta=f"{eff-85:.1f}%" if eff < 85 else None)
-c3.metric("Per Capita", f"{per_capita:.0f} L/c/d")
-c4.metric("Status", "CRITICAL" if eff < 70 else "NORMAL")
+c1, c2, c3 = st.columns(3)
+c1.markdown(f"<div class='kpi-card'><b>Well Production</b><br><span style='font-size:24px'>{latest['well_usage_m3']:.1f} m³</span></div>", unsafe_allow_html=True)
+c2.markdown(f"<div class='kpi-card'><b>System Efficiency</b><br><span style='font-size:24px'>{(latest['Distribution']/latest['well_usage_m3'])*100:.1f}%</span></div>", unsafe_allow_html=True)
+c3.metric("Per Capita (LPCD)", f"{current_lpcd:.0f} L", delta=f"{current_lpcd - WHO_BASELINE:.1f} vs WHO Std", delta_color="inverse")
 
-# DIAGNOSTICS
-if eff < 70:
-    st.error("🚨 CRITICAL: Efficiency below 70%. Inspect distribution network for leaks.")
-
-# ADVANCED VISUALIZATION
+# --- INTERACTIVE VISUALIZATION ---
+st.subheader("Time-Series Infrastructure Load")
 fig = go.Figure()
 fig.add_trace(go.Bar(x=df['log_date'], y=df['well_usage_m3'], name="Production", marker_color="#1B263B"))
 fig.add_trace(go.Scatter(x=df['log_date'], y=df['Distribution'], name="Distribution", line=dict(color="#A68A64", width=3)))
+fig.add_hline(y=WHO_BASELINE * pop / 1000, line_dash="dot", line_color="#941B0C", annotation_text="WHO Standard Limit")
 
-# WHO BENCHMARK LINE
-fig.add_hline(y=(st.session_state.target_lpd * st.session_state.pop) / 1000, 
-              line_dash="dash", line_color="red", annotation_text="WHO Standard")
-
-fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", y=1.1))
+fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h"))
 st.plotly_chart(fig, use_container_width=True)
 
-# DATA TABLE
-st.subheader("Historical Data")
-st.dataframe(df, use_container_width=True)
+# --- ACTIONABLE DIAGNOSTICS ---
+st.subheader("Operational Diagnostics")
+if current_lpcd > 120:
+    st.warning("⚠️ High Consumption: Current per-capita usage significantly exceeds WHO boarding school baseline (100L). Initiate water-saving protocols.")
+elif current_lpcd < 80:
+    st.success("✅ Water conservation measures active.")
+else:
+    st.info("ℹ️ Consumption within standard operating parameters.")
