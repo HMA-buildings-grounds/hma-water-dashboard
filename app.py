@@ -2,62 +2,89 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from sqlalchemy import create_engine
-import io
 
-st.set_page_config(page_title="HMA Infrastructure Command Center", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="HMA Water Intelligence", layout="wide", page_icon="💧")
 
-# --- CSS: SCADA-Inspired Styling ---
+# --- TYPE-SAFE STATE INITIALIZATION ---
+if 'pop' not in st.session_state:
+    st.session_state.pop = 370
+if 'target_lpd' not in st.session_state:
+    st.session_state.target_lpd = 75
+
+# --- ENTERPRISE CSS ---
 st.markdown("""
     <style>
-    .kpi-card {background: #FFFFFF; padding: 1.5rem; border-radius: 8px; border-left: 5px solid #1B263B; box-shadow: 0 2px 4px rgba(0,0,0,0.1);}
-    .header-band {background: #1B263B; color: white; padding: 10px 20px; border-radius: 5px; margin-bottom: 20px;}
+    .stApp {background-color: #F8FAFC;}
+    .metric-card {background: white; padding: 20px; border-radius: 12px; border: 1px solid #E2E8F0; box-shadow: 0 4px 6px rgba(0,0,0,0.05);}
+    h1 {color: #1B263B; font-weight: 800;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- DATA ENGINE ---
-@st.cache_data(ttl=600)
-def load_data():
-    c = st.secrets["connections"]["mysql"]
-    engine = create_engine(f"mysql+pymysql://{c['username']}:{c['password']}@{c['host']}:{c['port']}/{c['database']}",
-                           connect_args={"ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}})
-    df = pd.read_sql("SELECT log_date, well_usage_m3, booster_reading FROM water_logs ORDER BY log_date ASC", engine)
-    df['log_date'] = pd.to_datetime(df['log_date'])
-    df = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
-    df['Distribution'] = df['booster_reading'].diff().fillna(0)
+# --- MOCK DATA ENGINE (Replace with your actual SQL load_data) ---
+@st.cache_data
+def get_data():
+    dates = pd.date_range(start="2026-01-01", periods=30)
+    df = pd.DataFrame({
+        'log_date': dates,
+        'well_usage_m3': np.random.uniform(60, 110, 30),
+        'Distribution': np.random.uniform(50, 95, 30)
+    })
+    df['Efficiency'] = (df['Distribution'] / df['well_usage_m3']) * 100
     return df
 
-df = load_data()
+df = get_data()
 
-# --- HEADER & GLOBAL FILTERS ---
-st.markdown('<div class="header-band"><h1>HMA INFRASTRUCTURE COMMAND CENTER</h1></div>', unsafe_allow_html=True)
-col_a, col_b, col_c = st.columns([2, 2, 1])
-pop = col_a.number_input("Campus Daily Population", value=370, min_value=1)
-sel_date = col_b.selectbox("Operational Snapshot", df['log_date'].dt.date.unique()[::-1])
+# --- SIDEBAR: OPERATIONAL CONTROLS ---
+with st.sidebar:
+    st.markdown("## ⚙️ Control Center")
+    
+    # TYPE-SAFE INPUTS
+    st.number_input("Campus Population", value=int(st.session_state.pop), step=1, format="%d", key="pop")
+    st.number_input("WHO Target (L/c/d)", value=int(st.session_state.target_lpd), step=1, format="%d", key="target_lpd")
+    
+    st.divider()
+    
+    # EXPORT MODULE
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button("📥 Export Data (CSV)", csv, "water_usage_report.csv", "text/csv")
+    
+    st.markdown("### Compliance Links")
+    st.markdown("• [WHO Guidelines](https://www.who.int/publications/i/item/9789241549950)")
 
-# --- DOWNLOAD LOGIC ---
-csv = df.to_csv(index=False).encode('utf-8')
-col_c.download_button("Export Data (CSV)", csv, "HMA_Water_Data.csv", "text/csv")
+# --- MAIN UI ---
+st.title("💧 Water Infrastructure Executive Report")
 
-# --- KPIs ---
-curr = df[df['log_date'].dt.date == sel_date].iloc[0]
-lpcd = (curr['Distribution'] * 1000) / pop
-who_target = 100 # WHO standard for boarding schools
+# KPI CALCULATIONS
+latest = df.iloc[-1]
+prod = latest['well_usage_m3']
+dist = latest['Distribution']
+eff = latest['Efficiency']
+per_capita = (dist * 1000) / st.session_state.pop
 
-cols = st.columns(4)
-cols[0].metric("Production", f"{curr['well_usage_m3']:.1f} m³")
-cols[1].metric("Efficiency", f"{(curr['Distribution']/curr['well_usage_m3'])*100:.1f}%")
-cols[2].metric("Campus LPCD", f"{lpcd:.0f} L", delta=f"{lpcd - who_target:.0f} vs WHO Target", delta_color="inverse")
-cols[3].metric("Loss Volume", f"{curr['well_usage_m3'] - curr['Distribution']:.1f} m³")
+# KPI ROW
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Well Production", f"{prod:.1f} m³")
+c2.metric("Efficiency", f"{eff:.1f}%", delta=f"{eff-85:.1f}%" if eff < 85 else None)
+c3.metric("Per Capita", f"{per_capita:.0f} L/c/d")
+c4.metric("Status", "CRITICAL" if eff < 70 else "NORMAL")
 
-# --- ANALYTICAL ENGINE ---
-st.subheader("Performance vs. WHO Standard")
+# DIAGNOSTICS
+if eff < 70:
+    st.error("🚨 CRITICAL: Efficiency below 70%. Inspect distribution network for leaks.")
+
+# ADVANCED VISUALIZATION
 fig = go.Figure()
 fig.add_trace(go.Bar(x=df['log_date'], y=df['well_usage_m3'], name="Production", marker_color="#1B263B"))
-fig.add_trace(go.Scatter(x=df['log_date'], y=[who_target * pop / 1000] * len(df), name="WHO Standard Line", line=dict(color="#941B0C", dash='dash')))
-fig.update_layout(template="plotly_white", height=400, hovermode="x unified")
+fig.add_trace(go.Scatter(x=df['log_date'], y=df['Distribution'], name="Distribution", line=dict(color="#A68A64", width=3)))
+
+# WHO BENCHMARK LINE
+fig.add_hline(y=(st.session_state.target_lpd * st.session_state.pop) / 1000, 
+              line_dash="dash", line_color="red", annotation_text="WHO Standard")
+
+fig.update_layout(template="plotly_white", hovermode="x unified", legend=dict(orientation="h", y=1.1))
 st.plotly_chart(fig, use_container_width=True)
 
-# --- DIAGNOSTIC LOGS ---
-with st.expander("System Integrity Diagnostics"):
-    st.table(df.tail(7))
+# DATA TABLE
+st.subheader("Historical Data")
+st.dataframe(df, use_container_width=True)
