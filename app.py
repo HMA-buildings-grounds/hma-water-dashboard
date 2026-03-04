@@ -7,203 +7,240 @@ import io
 from datetime import datetime
 
 # ==========================================
-# 1. SURGICAL CSS & DESIGN SYSTEM
+# 1. THE ARCHITECTURAL UI (SaaS-GRADE)
 # ==========================================
-st.set_page_config(page_title="HMA BI Enterprise", layout="wide", page_icon="💧")
+st.set_page_config(
+    page_title="HMA Infrastructure BI",
+    page_icon="💧",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
-# Executive Palette
-NAVY_DEEP = "#0A192F"  # Darker, sharper navy
-HMA_GOLD = "#C5A022"   # Refined gold
-SLATE_TEXT = "#475569"
-WHITE = "#FFFFFF"
+# Executive Color Palette
+PRUSSIAN_BLUE = "#001f3f"  # High-end Navy
+HMA_GOLD = "#d4af37"       # Metallic Gold
+VIBRANT_GREEN = "#00ff88"  # Neon Success
+CRIMSON = "#ff4b4b"        # Sharp Alert
+SLATE = "#1e293b"          # Modern Text Slate
 
-# Inject High-End UI Styles
+# High-Performance CSS Injection
 st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap');
     
     html, body, [class*="css"] {{
-        font-family: 'Inter', sans-serif !important;
-        background-color: #F1F5F9;
+        font-family: 'Manrope', sans-serif;
+        background-color: #f1f5f9;
     }}
 
-    /* Remove Default Padding */
-    .block-container {{ padding-top: 1.5rem !important; padding-bottom: 0rem !important; }}
-    
-    /* Sharp KPI Card Design */
-    .kpi-card {{
-        background: {WHITE};
-        border-radius: 4px;
-        padding: 24px;
-        border-bottom: 4px solid {HMA_GOLD};
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        min-height: 140px;
+    /* Sharp Card Design */
+    [data-testid="stMetric"] {{
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 4px; /* Sharp edges for a "sword" feel */
+        padding: 25px !important;
+        box-shadow: 10px 10px 0px -2px {PRUSSIAN_BLUE}; /* Brutalist Shadow */
+        transition: transform 0.2s ease;
     }}
-    .kpi-label {{ color: {SLATE_TEXT}; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; }}
-    .kpi-value {{ color: {NAVY_DEEP}; font-size: 2.2rem; font-weight: 800; margin-top: 8px; }}
-    .kpi-delta {{ font-size: 0.85rem; font-weight: 600; margin-top: 4px; }}
-
-    /* Sidebar Refinement */
-    [data-testid="stSidebar"] {{ background-color: {WHITE}; border-right: 1px solid #E2E8F0; width: 300px !important; }}
-    .stSelectbox, .stSlider, .stNumberInput {{ margin-bottom: 20px; }}
+    [data-testid="stMetric"]:hover {{
+        transform: translateY(-5px);
+    }}
     
-    /* Header Block */
-    .header-container {{ border-left: 10px solid {NAVY_DEEP}; padding-left: 20px; margin-bottom: 30px; }}
-    .header-title {{ font-size: 2.4rem; font-weight: 800; color: {NAVY_DEEP}; letter-spacing: -0.02em; }}
-    .header-sub {{ color: {HMA_GOLD}; font-weight: 600; font-size: 1rem; text-transform: uppercase; }}
+    [data-testid="stMetricValue"] {{ 
+        font-size: 3rem !important; 
+        font-weight: 800 !important; 
+        color: {PRUSSIAN_BLUE} !important;
+        letter-spacing: -2px;
+    }}
+    
+    /* Custom Sidebar Branding */
+    .sidebar-logo {{
+        text-align: center;
+        padding: 20px;
+        background: #ffffff;
+        border-bottom: 2px solid {PRUSSIAN_BLUE};
+        margin-bottom: 20px;
+    }}
+
+    /* Global Title Polish */
+    .dashboard-title {{
+        font-size: 2.8rem;
+        font-weight: 800;
+        color: {PRUSSIAN_BLUE};
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        border-left: 15px solid {HMA_GOLD};
+        padding-left: 20px;
+        margin-bottom: 5px;
+    }}
+    
+    /* Button Polish */
+    .stButton>button {{
+        border-radius: 0px;
+        background-color: {PRUSSIAN_BLUE};
+        color: white;
+        font-weight: 600;
+        border: none;
+        width: 100%;
+        height: 50px;
+    }}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA ENGINE (COLAB LOGIC PORT)
+# 2. PRECISION DATA ENGINE
 # ==========================================
-@st.cache_data(ttl=300)
-def fetch_live_data():
+@st.cache_data(ttl=600)
+def load_precision_data():
     sheet_id = "1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ"
     url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
     
     df_raw = pd.read_csv(url, header=None)
-    header_idx = next(i for i, r in df_raw.iterrows() if 'Date' in [str(v).strip() for v in r.values if pd.notnull(v)])
+    header_idx = next(i for i, row in df_raw.iterrows() if 'Date' in [str(v).strip() for v in row.values if pd.notnull(v)])
     df = pd.read_csv(url, skiprows=header_idx)
     df.columns = [str(c).strip() for c in df.columns]
 
-    # Filters (Colab Specific: 8am/4pm only)
-    if 'Time' in df.columns:
-        df = df[df['Time'].isin(['8:00 AM', '4:00 PM'])].copy()
-
-    def clean_val(x):
-        try: return float(re.split(r'\(|\s', str(x))[0].replace(',', ''))
+    def to_f(val):
+        try: return float(re.split(r'\(|\s', str(val))[0].replace(',', ''))
         except: return 0.0
 
     usage_col = next((c for c in df.columns if "Usage Since" in c), None)
     meter_col = next((c for c in df.columns if "Meter Reading" in c or "Booster" in c), None)
 
-    df['Well_Prod'] = df[usage_col].apply(clean_val) if usage_col else 0
-    df['Meter_Raw'] = df[meter_col].apply(clean_val) if meter_col else 0
+    df['Prod'] = df[usage_col].apply(to_f) if usage_col else 0
+    df['Meter'] = df[meter_col].apply(to_f) if meter_col else 0
 
-    # Year Logic: Jan-Apr are 2026, others 2025
-    def hma_date(d):
+    # Logical Date Processor
+    def parse_dt(d):
         try:
-            yr = "2026" if any(m in str(d) for m in ["Jan", "Feb", "Mar", "Apr"]) else "2025"
-            return pd.to_datetime(f"{d} {yr}", errors='coerce')
+            d_str = str(d).strip()
+            # Intelligent Year Detection (HMA Logic)
+            yr = "2026" if any(m in d_str for m in ["Jan", "Feb", "Mar", "Apr"]) else "2025"
+            return pd.to_datetime(f"{d_str} {yr}", errors='coerce')
         except: return pd.NaT
 
-    df['Full_Date'] = df['Date'].apply(hma_date)
+    df['Full_Date'] = df['Date'].apply(parse_dt)
     df = df.dropna(subset=['Full_Date'])
 
-    daily = df.groupby('Full_Date').agg({'Well_Prod':'sum', 'Meter_Raw':'max'}).reset_index().sort_values('Full_Date')
+    daily = df.groupby('Full_Date').agg({'Prod':'sum', 'Meter':'max'}).reset_index().sort_values('Full_Date')
     
-    # Verified Distribution (Install Cutoff Feb 5th 2026)
-    daily['Dist'] = daily['Meter_Raw'].diff()
+    # Surgical Delta Logic
+    daily['Dist'] = daily['Meter'].diff()
+    # Meter Installation Reference: Feb 5th 2026
     daily.loc[daily['Full_Date'] < pd.Timestamp("2026-02-05"), 'Dist'] = np.nan
     daily.loc[daily['Dist'] < 0, 'Dist'] = 0
-    daily['Avg_30'] = daily['Well_Prod'].rolling(window=30, min_periods=1).mean()
+    daily['Avg_30'] = daily['Prod'].rolling(window=30, min_periods=1).mean()
     
     return daily
 
 try:
-    master_df = fetch_live_data()
+    master_df = load_precision_data()
 except Exception as e:
-    st.error(f"ENGINE ERROR: {e}"); st.stop()
+    st.error(f"Surgical Error in Data Engine: {e}")
+    st.stop()
 
 # ==========================================
-# 3. SIDEBAR & LOGO (SHARP FIX)
+# 3. SIDEBAR (THE COMMAND CENTER)
 # ==========================================
 with st.sidebar:
-    # Guaranteed Logo Loading
-    st.image("https://hma-edu.org/wp-content/uploads/2021/01/HMA-Logo-Color.png", width=220)
-    st.markdown("<br><br>", unsafe_allow_html=True)
+    # High-Stability Logo Container
+    st.markdown('<div class="sidebar-logo">', unsafe_allow_html=True)
+    st.image("https://hma-edu.org/wp-content/uploads/2021/01/HMA-Logo-Color.png", use_container_width=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    st.markdown("### 🎛️ BI CONTROLS")
-    population = st.number_input("Campus Population", value=260)
-    savings_goal = st.slider("Conservation Goal (%)", 0, 40, 10)
+    st.markdown("### 🎛️ PARAMETERS")
+    population = st.number_input("Campus Population", value=260, step=10)
+    target_savings = st.slider("Conservation Goal (%)", 0, 50, 10)
     
     st.markdown("---")
+    st.markdown("### 🔍 NAVIGATION")
     dates = sorted(master_df['Full_Date'].dt.date.unique(), reverse=True)
-    sel_date = st.selectbox("📅 REPORTING DATE", dates)
+    sel_date = st.selectbox("Select Report Date", dates)
     
     st.markdown("---")
-    st.caption("SYSTEM STATUS: LIVE SYNC")
-    st.caption("STANDARD: WHO WATER NOTE 9.1")
+    st.markdown("### 📜 REFS")
+    st.caption("Standard: WHO LPCD (100L)")
+    st.caption("Infrastructure: 90% Efficiency Target")
 
 # ==========================================
-# 4. DASHBOARD - SHARP INTERFACE
+# 4. MAIN INTERFACE (DASHBOARD)
 # ==========================================
-# Header
-st.markdown(f"""
-    <div class="header-container">
-        <div class="header-sub">Haile-Manas Academy | Infrastructure BI</div>
-        <div class="header-title">WATER INFRASTRUCTURE DASHBOARD</div>
-        <div style="color:#64748B; font-weight:700; font-size:0.9rem;">
-            LIVE REPORTING PERIOD: {sel_date} | SYSTEM STABILITY: 99.8%
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
-# Data Processing for selection
-day = master_df[master_df['Full_Date'].dt.date == sel_date].iloc[0]
-p = day['Well_Prod']
-d = day['Dist'] if not pd.isna(day['Dist']) else 0
-lpcd = (d * 1000) / population if d > 0 else 0
-eff = (d / p * 100) if p > 0 else 0
-loss = max(0, p - d)
-target_v = day['Avg_30'] * (1 - savings_goal/100)
+# Dashboard Header
+st.markdown('<p class="dashboard-title">WATER INFRASTRUCTURE BI</p>', unsafe_allow_html=True)
+st.markdown(f"**DATA STATUS:** :green[ACTIVE] | **LOCATION:** ADDIS ABABA, ET | **DATE:** {sel_date}")
 
-# --- SURGICAL KPI CARDS ---
-c1, c2, c3 = st.columns(3)
+# Logical Calculations
+day_data = master_df[master_df['Full_Date'].dt.date == sel_date].iloc[0]
+p_val = day_data['Prod']
+d_val = day_data['Dist'] if not pd.isna(day_data['Dist']) else 0
+lpcd_val = (d_val * 1000) / population if d_val > 0 else 0
+eff_val = (d_val / p_val * 100) if p_val > 0 else 0
+target_val = day_data['Avg_30'] * (1 - target_savings/100)
+var_val = p_val - target_val
 
-def custom_kpi(col, title, value, delta, status_color):
-    col.markdown(f"""
-        <div class="kpi-card">
-            <div class="kpi-label">{title}</div>
-            <div class="kpi-value">{value}</div>
-            <div class="kpi-delta" style="color:{status_color};">{delta}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-custom_kpi(c1, "WHO Standard (LPCD)", f"{lpcd:.0f} L", f"{lpcd-100:+.1f} vs Target", SUCCESS_GREEN if lpcd < 110 else ALERT_RED)
-custom_kpi(c2, "Infrastructure Efficiency", f"{eff:.1f}%", f"{loss:.1f} m³ Daily Loss", SUCCESS_GREEN if eff > 90 else ALERT_RED)
-custom_kpi(c3, "Well Extraction", f"{p:.1f} m³", f"{p-target_v:+.1f} vs Goal", SUCCESS_GREEN if p < target_v else ALERT_RED)
+# --- ROW 1: POWER METRICS ---
+m1, m2, m3 = st.columns(3)
+with m1:
+    st.metric("WHO LPCD INDEX", f"{lpcd_val:.0f} L", f"{lpcd_val-100:+.0f} L vs WHO", delta_color="inverse")
+with m2:
+    loss = max(0, p_val - d_val)
+    st.metric("SYSTEM EFFICIENCY", f"{eff_val:.1f}%", f"{loss:.1f} m³ Leak Loss", delta_color="inverse")
+with m3:
+    st.metric(f"WELL PRODUCTION", f"{p_val:.1f} m³", f"{var_val:+.1f} m³ vs Target", delta_color="inverse")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# --- TREND ANALYSIS ---
-st.markdown("### 📈 EXTRACTION VS. TARGET ANALYTICS")
-fig_t = go.Figure()
-fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Well_Prod'], name='Actual Extraction',
-                           line=dict(color=NAVY_DEEP, width=4), fill='tozeroy', fillcolor='rgba(10, 25, 47, 0.03)'))
-fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Avg_30']*(1-savings_goal/100), 
-                           name='Conservation Goal', line=dict(color=HMA_GOLD, width=3, dash='dash')))
-fig_t.update_layout(height=400, template="plotly_white", margin=dict(l=0,r=0,t=20,b=0), 
-                  legend=dict(orientation="h", y=1.1, x=0), hovermode="x unified")
-st.plotly_chart(fig_t, use_container_width=True)
+# --- ROW 2: HIGH-END VISUALS ---
+c_left, c_right = st.columns([2, 1])
 
-# --- BOTTOM ROW ---
-b1, b2 = st.columns([2, 1])
+with c_left:
+    st.markdown("### 📈 Performance Tracking")
+    fig_t = go.Figure()
+    # High-contrast Area Chart
+    fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Prod'], name='Well Production',
+                               line=dict(color=PRUSSIAN_BLUE, width=4), fill='tozeroy', fillcolor='rgba(0, 31, 63, 0.05)'))
+    fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Avg_30']*(1-target_savings/100), 
+                               name='Target Boundary', line=dict(color=HMA_GOLD, width=3, dash='dot')))
+    fig_t.update_layout(height=450, template="plotly_white", margin=dict(l=0,r=0,t=10,b=0), legend=dict(orientation="h", y=1.1, x=0))
+    st.plotly_chart(fig_t, use_container_width=True)
 
-with b1:
-    st.markdown("### 📊 DAILY WATER BALANCE")
-    fig_b = go.Figure()
-    fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Well_Prod'], name='Well Production', marker_color='#E2E8F0'))
-    fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Dist'], name='Verified Consumption', marker_color=NAVY_DEEP))
-    
-    # Meter Installation Marker
-    install_ts = datetime(2026, 2, 5).timestamp() * 1000
-    fig_b.add_vline(x=install_ts, line_width=2, line_dash="dot", line_color=HMA_GOLD)
-    fig_b.add_annotation(x=install_ts, y=p*1.5, text="METER ONLINE", showarrow=False, font=dict(color=HMA_GOLD, size=10, weight=800))
-    
-    fig_b.update_layout(barmode='overlay', height=350, template="plotly_white", margin=dict(l=0,r=0,t=40,b=0))
-    st.plotly_chart(fig_b, use_container_width=True)
+with c_right:
+    st.markdown("### 🎯 Verification")
+    # Custom Gauge with Dark Mode feel
+    fig_g = go.Figure(go.Indicator(
+        mode="gauge+number", value=eff_val,
+        number={'suffix': "%", 'font': {'color': PRUSSIAN_BLUE, 'size': 80}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': PRUSSIAN_BLUE},
+               'steps': [{'range': [0, 80], 'color': "#fee2e2"},
+                         {'range': [80, 100], 'color': "#d1fae5"}]}))
+    fig_g.update_layout(height=450, margin=dict(t=100, b=0, l=30, r=30))
+    st.plotly_chart(fig_g, use_container_width=True)
 
-with b2:
-    st.markdown("### 📥 ENTERPRISE EXPORT")
-    st.markdown("<br>", unsafe_allow_html=True)
-    csv = master_df.to_csv(index=False).encode('utf-8')
-    st.download_button("📂 DOWNLOAD CSV DATA", csv, "HMA_Water_Data.csv", use_container_width=True)
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as wr: master_df.to_excel(wr, index=False)
-    st.download_button("📊 DOWNLOAD EXCEL REPORT", output.getvalue(), "HMA_Enterprise_Report.xlsx", use_container_width=True)
+# --- ROW 3: WATER BALANCE (BRUTALIST BARS) ---
+st.markdown("### 📊 Supply vs Verified Distribution")
+fig_b = go.Figure()
+fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Prod'], name='Gross Supply (Well)', marker_color='#cbd5e1'))
+fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Dist'], name='Verified Distribution', marker_color=PRUSSIAN_BLUE))
 
+# Digital Meter Milestone
+milestone = datetime(2026, 2, 5).timestamp() * 1000
+fig_b.add_vline(x=milestone, line_width=2, line_dash="dash", line_color=HMA_GOLD)
+fig_b.add_annotation(x=milestone, y=master_df['Prod'].max()*1.1, text="DIGITAL METERING ONLINE", showarrow=False, font=dict(color=HMA_GOLD, weight='bold'))
+
+fig_b.update_layout(barmode='overlay', height=400, template="plotly_white", margin=dict(l=0,r=0,t=50,b=0), legend=dict(orientation="h", y=1.2))
+st.plotly_chart(fig_b, use_container_width=True)
+
+# ==========================================
+# 5. DATA SYNDICATION (EXPORT)
+# ==========================================
 st.markdown("---")
-st.caption(f"HMA BI ENTERPRISE v7.0 | SYSTEM REFRESHED: {datetime.now().strftime('%H:%M:%S')}")
+d1, d2, d3 = st.columns([2, 1, 1])
+with d1:
+    st.caption(f"HMA BI ENTERPRISE v7.0 | KERNEL: {datetime.now().strftime('%H:%M:%S')} | BUILDINGS & GROUNDS DIV")
+with d2:
+    st.download_button("📄 EXPORT CSV", master_df.to_csv(index=False).encode('utf-8'), f"HMA_DATA_{sel_date}.csv", use_container_width=True)
+with d3:
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='xlsxwriter') as wr: master_df.to_excel(wr, index=False, sheet_name='BI_Export')
+    st.download_button("📊 EXCEL REPORT", out.getvalue(), f"HMA_EXCEL_{sel_date}.xlsx", use_container_width=True)
