@@ -33,7 +33,7 @@ st.markdown("""
 def load_and_process_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
     # Read data (assuming it reads the active sheet or you specified it in secrets)
-    df_raw = conn.read()
+    df_raw = conn.read(spreadsheet="https://docs.google.com/spreadsheets/d/1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ/edit#gid=1207984195")
     
     # Cleaning Logic (Based on your original code)
     rows = df_raw.values.tolist()
