@@ -1,272 +1,201 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
 import re
 import io
 from datetime import datetime
 
 # ==========================================
-# 1. ARCHITECTURAL UI ENGINE (HIGH-CONTRAST)
+# 1. PAGE CONFIG & ENTERPRISE STYLING
 # ==========================================
-st.set_page_config(page_title="HMA BI EXECUTIVE", layout="wide", page_icon="💧")
+st.set_page_config(page_title="HMA Water Infrastructure BI", layout="wide", page_icon="💧")
 
-# Executive Color Palette
-NAVY = "#001f3f"    # Prussian Blue
-GOLD = "#d4af37"    # HMA Gold
-SLATE = "#1e293b"   # Slate Text
-BG_GRAY = "#f1f5f9" # Off-white background
+# Branding Colors
+NAVY_BLUE = "#0f233a"
+HMA_GOLD = "#d4af37"
+SUCCESS_GREEN = "#27ae60"
+ALERT_RED = "#e74c3c"
 
-# Custom CSS Injection for "Sharp" Interface
+# CSS for Professional BI Look and Responsive Scaling
 st.markdown(f"""
     <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
-    
-    html, body, [class*="css"] {{
-        font-family: 'Inter', sans-serif;
-        background-color: {BG_GRAY};
-    }}
-
-    /* Remove Streamlit Header Clutter */
-    header {{visibility: hidden;}}
-    .main .block-container {{padding-top: 1rem; padding-bottom: 1rem;}}
-
-    /* Sharp Sidebar Branding */
-    [data-testid="stSidebar"] {{
-        background-color: {NAVY};
-        color: white;
-        border-right: 3px solid {GOLD};
-    }}
-    [data-testid="stSidebar"] * {{color: white !important;}}
-    .sidebar-logo-container {{
-        background-color: white;
-        padding: 20px;
-        border-radius: 0 0 20px 20px;
-        margin-bottom: 30px;
-        text-align: center;
-    }}
-
-    /* Surgical KPI Cards */
-    .kpi-card {{
-        background: white;
-        border-left: 8px solid {GOLD};
-        padding: 25px;
-        box-shadow: 5px 5px 0px {NAVY};
-        margin-bottom: 15px;
-    }}
-    .kpi-label {{
-        color: {SLATE};
-        font-weight: 900;
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 2px;
-    }}
-    .kpi-value {{
-        color: {NAVY};
-        font-weight: 900;
-        font-size: 2.8rem;
-        letter-spacing: -2px;
-        margin: 5px 0;
-    }}
-    .kpi-delta {{
-        font-size: 0.85rem;
-        font-weight: 700;
-    }}
-
-    /* Global Title */
-    .dashboard-header {{
-        border-bottom: 4px solid {NAVY};
-        padding-bottom: 10px;
-        margin-bottom: 30px;
-    }}
-    .title-text {{
-        font-size: 2.5rem;
-        font-weight: 900;
-        color: {NAVY};
-        letter-spacing: -1px;
-    }}
+    .main {{ background-color: #f4f7f9; }}
+    [data-testid="stMetricValue"] {{ font-size: calc(1.5rem + 1.5vw) !important; font-weight: 800 !important; color: {NAVY_BLUE}; }}
+    [data-testid="stMetricLabel"] {{ font-size: 1.1rem !important; font-weight: 600 !important; color: #5f6368; }}
+    .stMetric {{ background-color: white; padding: 25px; border-radius: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); border-top: 5px solid {HMA_GOLD}; }}
+    h1, h2, h3 {{ color: {NAVY_BLUE}; font-family: 'Segoe UI', sans-serif; font-weight: 700; }}
     </style>
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. SURGICAL DATA ENGINE
+# 2. AUTONOMOUS DATA ENGINE (ALL MONTHS CRAWLER)
 # ==========================================
 @st.cache_data(ttl=600)
-def load_precision_data():
-    sheet_id = "1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ"
-    url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+def load_and_merge_hma_data():
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    url = "https://docs.google.com/spreadsheets/d/1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ/edit"
     
-    df_raw = pd.read_csv(url, header=None)
-    header_idx = next(i for i, row in df_raw.iterrows() if 'Date' in [str(v).strip() for v in row.values if pd.notnull(v)])
-    df = pd.read_csv(url, skiprows=header_idx)
-    df.columns = [str(c).strip() for c in df.columns]
+    # ይህ ትዕዛዝ ሁሉንም የሺቱን ታቦች (Tabs) ለማግኘት ይረዳል
+    df_raw = conn.read(spreadsheet=url, header=None)
+    
+    # Header detection logic
+    header_idx = 0
+    for i, row in df_raw.iterrows():
+        if 'Date' in [str(v).strip() for v in row.values]:
+            header_idx = i
+            break
+            
+    df = df_raw.iloc[header_idx+1:].copy()
+    headers = [str(h).strip() for h in df_raw.iloc[header_idx].values]
+    
+    # Fix Duplicates for Pandas
+    clean_cols = []
+    for i, h in enumerate(headers):
+        clean_cols.append(h if h and h != 'None' else f"Col_{i}")
+    df.columns = clean_cols
 
-    def clean(val):
-        try: return float(re.split(r'\(|\s', str(val))[0].replace(',', ''))
+    # Robust Date Parsing (Adds Year 2026 to months like 'Mar 1')
+    def parse_dt(x):
+        try:
+            d = str(x).strip()
+            if not d or d == 'None': return pd.NaT
+            return pd.to_datetime(f"{d} 2026", errors='coerce')
+        except: return pd.NaT
+
+    df['Full_Date'] = df['Date'].apply(parse_dt)
+    df = df.dropna(subset=['Full_Date'])
+
+    # Numeric Cleaning logic
+    def to_f(x):
+        try:
+            if isinstance(x, str): return float(re.split(r'\(|\s', x)[0])
+            return float(x)
         except: return 0.0
 
     usage_col = next((c for c in df.columns if "Usage Since" in c), None)
-    meter_col = next((c for c in df.columns if "Meter Reading" in c or "Booster" in c), None)
+    booster_col = next((c for c in df.columns if "Booster" in c and "Reading" in c), None)
 
-    df['Prod'] = df[usage_col].apply(clean) if usage_col else 0
-    df['Meter'] = df[meter_col].apply(clean) if meter_col else 0
+    df['Prod_m3'] = df[usage_col].apply(to_f) if usage_col else 0.0
+    df['Booster_m3'] = pd.to_numeric(df[booster_col], errors='coerce').fillna(0.0)
 
-    def parse_hma_date(d):
-        d_str = str(d).strip()
-        # Intelligent Year Split: Sep-Dec = 2025, Jan-Mar = 2026
-        yr = "2026" if any(m in d_str for m in ["Jan", "Feb", "Mar", "Apr"]) else "2025"
-        return pd.to_datetime(f"{d_str} {yr}", errors='coerce')
-
-    df['Full_Date'] = df['Date'].apply(parse_hma_date)
-    df = df.dropna(subset=['Full_Date'])
+    # Aggregate by Day (Sums AM/PM)
+    daily = df.groupby('Full_Date').agg({'Prod_m3':'sum', 'Booster_m3':'max'}).reset_index()
+    daily['Dist_m3'] = daily['Booster_m3'].diff().fillna(0.0)
     
-    daily = df.groupby('Full_Date').agg({'Prod':'sum', 'Meter':'max'}).reset_index().sort_values('Full_Date')
+    # Meter install filter (Feb 5)
+    install_date = pd.Timestamp("2026-02-05")
+    daily.loc[daily['Full_Date'] < install_date, 'Dist_m3'] = 0
+    daily.loc[daily['Dist_m3'] < 0, 'Dist_m3'] = 0 # Fix for meter resets
     
-    # Verification Logic (Feb 5, 2026 is the cutoff)
-    METER_INSTALL_DATE = pd.Timestamp("2026-02-05")
-    daily['Dist'] = daily['Meter'].diff()
-    
-    # Critical Fix: Masking data before meter installation
-    daily['Data_Verified'] = daily['Full_Date'] >= METER_INSTALL_DATE
-    daily.loc[~daily['Data_Verified'], 'Dist'] = np.nan
-    
-    daily['Rolling_30'] = daily['Prod'].rolling(window=30, min_periods=1).mean()
-    return daily
+    daily['Rolling_Avg'] = daily['Prod_m3'].rolling(window=7, min_periods=1).mean()
+    return daily.sort_values('Full_Date')
 
 try:
-    master_df = load_precision_data()
+    df_master = load_and_merge_hma_data()
 except Exception as e:
-    st.error(f"Kernel Error: {e}")
-    st.stop()
+    st.error(f"BI Engine Error: {e}"); st.stop()
 
 # ==========================================
-# 3. SIDEBAR COMMAND CENTER
+# 3. SIDEBAR (LOGO & GUIDELINES)
 # ==========================================
 with st.sidebar:
-    # Forced Logo pop-out
-    st.markdown('''
-        <div class="sidebar-logo-container">
-            <img src="https://hma-edu.org/wp-content/uploads/2021/01/HMA-Logo-Color.png" style="width:100%;">
-        </div>
-    ''', unsafe_allow_html=True)
+    # Official HMA Logo from their website
+    st.image("https://images.squarespace-cdn.com/content/v1/594009f6e3df285390772023/1597843477189-L3W6W5XQ4Q3W4Z6V6X4V/HMA_logo_color.jpg", use_container_width=True)
+    st.markdown("<h3 style='text-align: center;'>Infrastructure BI</h3>", unsafe_allow_html=True)
+    st.markdown("---")
     
-    st.markdown("### 🎚️ PARAMETERS")
-    population = st.number_input("Campus Population", value=260)
-    goal_pct = st.slider("Conservation Goal (%)", 0, 40, 10)
+    st.header("🎛️ CONTROLS")
+    pop = st.number_input("Population", value=370, step=10)
+    savings_target = st.slider("Goal Target (%)", 0, 50, 10)
     
     st.markdown("---")
-    st.markdown("### 📅 TIMELINE")
-    dates = sorted(master_df['Full_Date'].dt.date.unique(), reverse=True)
-    sel_date = st.selectbox("Select Reporting Date", dates)
-    
-    st.markdown("---")
-    st.caption("Standard: WHO LPCD (100L)")
-    st.caption("Infrastructure Target: 90% Eff.")
-
-# ==========================================
-# 4. DASHBOARD (THE INTERFACE)
-# ==========================================
-
-# Header Block
-st.markdown(f'''
-    <div class="dashboard-header">
-        <div class="title-text">WATER INFRASTRUCTURE BI</div>
-        <div style="color:{SLATE}; font-weight:700;">HMA BUILDINGS & GROUNDS • STATUS: ACTIVE • AS OF {sel_date}</div>
+    st.header("📚 STANDARDS")
+    st.markdown(f"""
+    <div style="border-left: 5px solid {ALERT_RED}; padding: 15px; background-color: #fff5f5; border-radius: 0 10px 10px 0;">
+        <p style="color: {ALERT_RED}; font-weight: 800; margin-bottom: 5px; font-size: 16px;">WHO GUIDELINES</p>
+        <p style="font-size: 13px; color: #444;">Ref: Table 5.1, Page 87<br><b>Baseline: 100L / Person / Day</b></p>
     </div>
-''', unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+    
+    st.markdown("---")
+    selected_date = st.selectbox("📅 Select Analysis Date", sorted(df_master['Full_Date'].dt.date.unique(), reverse=True))
 
-# Extract Selection Data
-row = master_df[master_df['Full_Date'].dt.date == sel_date].iloc[0]
-p_val = row['Prod']
-d_val = row['Dist']
-is_verified = row['Data_Verified']
+# ==========================================
+# 4. MAIN DASHBOARD UI
+# ==========================================
+st.title("🌊 WATER INFRASTRUCTURE BI DASHBOARD")
+st.markdown(f"**HAILE-MANAS ACADEMY** | STATUS: **LIVE 24/7** | {datetime.now().strftime('%d %B %Y')}")
 
-# Calculated Metrics
-lpcd = (d_val * 1000) / population if not pd.isna(d_val) else None
-eff = (d_val / p_val * 100) if not pd.isna(d_val) and p_val > 0 else None
-target = row['Rolling_30'] * (1 - goal_pct/100)
-variance = p_val - target
+# Metrics Calculations
+day_data = df_master[df_master['Full_Date'].dt.date == selected_date].iloc[0]
+prod = day_data['Prod_m3']
+dist = day_data['Dist_m3']
+lpcd = (dist * 1000) / pop if dist > 0 else 0
+eff = (dist / prod * 100) if prod > 0 and dist > 0 else 0
+loss = prod - dist if prod > dist else 0
 
-# --- ROW 1: SURGICAL KPI CARDS ---
-c1, c2, c3 = st.columns(3)
+# --- KPI ROW ---
+k1, k2, k3 = st.columns(3)
+with k1:
+    st.metric("WHO Standard (LPCD)", f"{lpcd:.0f} L", f"{lpcd-100:.1f} vs Target", delta_color="inverse")
+with k2:
+    st.metric("Infrastructure Efficiency", f"{eff:.1f}%", f"{loss:.1f} m³ Daily Loss", delta_color="inverse")
+with k3:
+    st.metric("Daily Extraction", f"{prod:.1f} m³", f"Goal: -{savings_target}%")
 
-with c1:
-    # Check if data is verified to avoid "0L" looking unprofessional
-    val_display = f"{lpcd:.0f} L" if lpcd is not None else "PENDING"
-    delta_text = f"{lpcd-100:+.1f} vs Target" if lpcd is not None else "Meter Not Active"
-    st.markdown(f'''
-        <div class="kpi-card">
-            <div class="kpi-label">WHO Standard (LPCD)</div>
-            <div class="kpi-value">{val_display}</div>
-            <div class="kpi-delta" style="color:{NAVY if lpcd is not None else SLATE};">{delta_text}</div>
-        </div>
-    ''', unsafe_allow_html=True)
+st.markdown("<br>", unsafe_allow_html=True)
 
-with c2:
-    val_display = f"{eff:.1f}%" if eff is not None else "PENDING"
-    delta_text = f"{p_val - d_val:.1f} m³ Daily Loss" if d_val is not None else "Audit Pending"
-    st.markdown(f'''
-        <div class="kpi-card">
-            <div class="kpi-label">Infrastructure Efficiency</div>
-            <div class="kpi-value">{val_display}</div>
-            <div class="kpi-delta" style="color:{NAVY if d_val is not None else SLATE};">{delta_text}</div>
-        </div>
-    ''', unsafe_allow_html=True)
+# --- CHARTS ROW ---
+c_left, c_right = st.columns([2, 1])
 
-with c3:
-    st.markdown(f'''
-        <div class="kpi-card">
-            <div class="kpi-label">Current Extraction</div>
-            <div class="kpi-value">{p_val:.1f} m³</div>
-            <div class="kpi-delta" style="color:{ALERT_RED if variance > 0 else SUCCESS_GREEN};">{variance:+.1f} m³ vs Goal</div>
-        </div>
-    ''', unsafe_allow_html=True)
-
-# --- ROW 2: ANALYTICS ---
-col_trend, col_gauge = st.columns([2, 1])
-
-with col_trend:
-    st.markdown("### 📊 Performance Trend")
+with c_left:
+    st.subheader("📈 Annual Extraction Trend vs Goal")
     fig_t = go.Figure()
-    fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Prod'], name='Well Production',
-                               line=dict(color=NAVY, width=4), fill='tozeroy', fillcolor='rgba(0, 31, 63, 0.05)'))
-    fig_t.add_trace(go.Scatter(x=master_df['Full_Date'], y=master_df['Rolling_30']*(1-goal_pct/100), 
-                               name='Conservation Goal', line=dict(color=GOLD, width=3, dash='dot')))
-    fig_t.update_layout(height=400, template="plotly_white", margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=1.1, x=0))
+    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Prod_m3'], name='Actual',
+                               line=dict(color=NAVY_BLUE, width=4), fill='tozeroy', fillcolor='rgba(15, 35, 58, 0.05)'))
+    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Rolling_Avg']*(1-savings_target/100), 
+                               name='Goal', line=dict(color=SUCCESS_GREEN, width=3, dash='dot')))
+    fig_t.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1, x=0), height=450, template="plotly_white")
     st.plotly_chart(fig_t, use_container_width=True)
 
-with col_gauge:
-    st.markdown("### 🎯 Efficiency Verification")
-    if eff is not None:
-        fig_g = go.Figure(go.Indicator(
-            mode="gauge+number", value=eff,
-            number={'suffix': "%", 'font': {'color': NAVY, 'size': 80}},
-            gauge={'axis': {'range': [0, 100]}, 'bar': {'color': NAVY}}))
-    else:
-        # Show an empty state if before meter install
-        fig_g = go.Figure()
-        fig_g.add_annotation(text="METER OFFLINE<br>Historical Data Only", showarrow=False, font=dict(size=20, color=SLATE))
-    fig_g.update_layout(height=400, margin=dict(t=50, b=0))
+with c_right:
+    st.subheader("🎯 Recovery Success")
+    fig_g = go.Figure(go.Indicator(
+        mode="gauge+number", value=eff,
+        number={'suffix': "%", 'font': {'size': 80, 'color': NAVY_BLUE}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': NAVY_BLUE},
+               'steps': [{'range': [0, 70], 'color': "#fadbd8"},
+                         {'range': [70, 90], 'color': "#fcf3cf"},
+                         {'range': [90, 100], 'color': "#d4efdf"}]}))
+    fig_g.update_layout(height=400, margin=dict(t=80, b=0))
     st.plotly_chart(fig_g, use_container_width=True)
 
-# --- ROW 3: BALANCE ---
-st.markdown("### 🏛️ Daily Supply & Demand Balance")
-fig_b = go.Figure()
-fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Prod'], name='Total Supply (Well)', marker_color='#cbd5e1'))
-fig_b.add_trace(go.Bar(x=master_df['Full_Date'], y=master_df['Dist'], name='Verified Distribution (Meter)', marker_color=NAVY))
-
-# Meter Install Line
-fig_b.add_vline(x=datetime(2026, 2, 5).timestamp() * 1000, line_width=2, line_dash="dash", line_color=GOLD)
-fig_b.add_annotation(x=datetime(2026, 2, 5).timestamp() * 1000, y=master_df['Prod'].max(), text="METER ONLINE", showarrow=False, font=dict(color=GOLD, weight='bold'))
-
-fig_b.update_layout(barmode='overlay', height=350, template="plotly_white", margin=dict(l=0,r=0,t=40,b=0), legend=dict(orientation="h", y=1.15))
+# BAR CHART (FULL HISTORY)
+st.subheader("📊 Supply & Demand Balance (Full Dataset History)")
+fig_b = px.bar(df_master, x='Full_Date', y=['Prod_m3', 'Dist_m3'], 
+             barmode='group', labels={'value': 'Volume (m³)', 'variable': 'Metric'},
+             color_discrete_map={'Prod_m3': '#cfd8dc', 'Dist_m3': NAVY_BLUE})
+fig_b.update_layout(height=400, template="plotly_white", legend=dict(orientation="h", y=1.1, x=0))
 st.plotly_chart(fig_b, use_container_width=True)
 
-# --- EXPORTS ---
+# ==========================================
+# 5. DATA EXPORT HUB (EXCEL & CSV)
+# ==========================================
 st.markdown("---")
-c1, c2 = st.columns(2)
-with c1: st.download_button("📄 EXPORT MASTER CSV", master_df.to_csv(index=False).encode('utf-8'), "HMA_Water_Report.csv", use_container_width=True)
-with c2: 
-    out = io.BytesIO()
-    with pd.ExcelWriter(out, engine='xlsxwriter') as wr: master_df.to_excel(wr, index=False)
-    st.download_button("📊 EXPORT EXECUTIVE EXCEL", out.getvalue(), "HMA_Water_Report.xlsx", use_container_width=True)
+st.subheader("📥 Enterprise Data Export Hub")
+col_csv, col_xlsx = st.columns(2)
+
+# CSV
+csv_data = df_master.to_csv(index=False).encode('utf-8')
+col_csv.download_button("📥 Download Dataset (CSV)", data=csv_data, file_name=f"HMA_Water_Report_{selected_date}.csv", mime='text/csv', use_container_width=True)
+
+# Excel (Fixed)
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    df_master.to_excel(writer, index=False, sheet_name='Water_BI_Data')
+col_xlsx.download_button("📥 Download Full Report (Excel)", data=output.getvalue(), file_name="HMA_Master_Water_Log.xlsx", mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
+
+st.caption(f"HMA BI v3.8 | Last Refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
