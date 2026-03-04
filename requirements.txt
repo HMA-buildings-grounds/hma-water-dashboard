@@ -1,6 +1,6 @@
 streamlit
 pandas
+numpy
 plotly
-st-gsheets-connection
-xlsxwriter
-openpyxl
+SQLAlchemy
+PyMySQL
