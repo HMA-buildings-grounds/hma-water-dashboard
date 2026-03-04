@@ -4,7 +4,6 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import datetime
 import re
 
 # ==========================================
@@ -27,40 +26,44 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA ENGINE
+# 2. DATA ENGINE (FIXED FOR HMA SHEET)
 # ==========================================
 @st.cache_data(ttl="1h")
 def load_and_process_data():
     conn = st.connection("gsheets", type=GSheetsConnection)
-    # Read data (assuming it reads the active sheet or you specified it in secrets)
-    df_raw = conn.read(spreadsheet="https://docs.google.com/spreadsheets/d/1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ/edit#gid=1207984195")
+    # ማሳሰቢያ፡ ያንተን ትክክለኛ የሺት ሊንክ እዚህ ጋር አስገብቻለሁ
+    url = "https://docs.google.com/spreadsheets/d/1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ/edit#gid=1207984195"
+    df_raw = conn.read(spreadsheet=url)
     
-    # Cleaning Logic (Based on your original code)
-    rows = df_raw.values.tolist()
-    # Find header row
-    header_idx = 1 # Usually row 1 in your sheet
-    df = pd.DataFrame(df_raw.iloc[header_idx:])
-    df.columns = df_raw.iloc[header_idx-1]
+    # የሺቱን ርዕስ ጥሎ ትክክለኛውን ሄደር (Date, Time...) ለማግኘት፡
+    df = df_raw.copy()
+    # ትክክለኛው ሄደር ያለው በሁለተኛው መስመር ላይ ነው
+    df.columns = df.iloc[0] 
+    df = df[1:].reset_index(drop=True)
     
-    # Filter for standard times
-    df = df[df['Time'].isin(['8:00 AM', '4:00 PM'])].copy()
+    # የአምዶችን ስም ማጽዳት (Spaces ካሉ ለማጥፋት)
+    df.columns = [str(c).strip() for c in df.columns]
 
     def to_num(val):
         try: return float(re.split(r'\(|\s', str(val))[0])
         except: return np.nan
 
+    # አምዶቹን መፈለግ
     usage_col = next((c for c in df.columns if "Usage Since" in c), None)
     booster_col = next((c for c in df.columns if "Booster" in c and "Reading" in c), None)
+    time_col = "Time" if "Time" in df.columns else df.columns[1]
 
     if usage_col: df['Well_Usage_m3'] = df[usage_col].apply(to_num)
     if booster_col: df['Booster_Reading'] = pd.to_numeric(df[booster_col], errors='coerce')
 
+    # ሰዓቱን መለየት (8:00 AM እና 4:00 PM ብቻ)
+    df = df[df[time_col].isin(['8:00 AM', '4:00 PM'])].copy()
+    
     df['Date_Clean'] = pd.to_datetime(df['Date'] + " 2026", errors='coerce')
     
     daily = df.groupby('Date_Clean').agg({'Well_Usage_m3':'sum', 'Booster_Reading':'max'}).reset_index()
     daily['Consumption_m3'] = daily['Booster_Reading'].diff()
     
-    # Filter after meter installation
     install_date = pd.Timestamp("2026-02-05")
     daily.loc[daily['Date_Clean'] < install_date, 'Consumption_m3'] = np.nan
     daily['Rolling_Avg_30d'] = daily['Well_Usage_m3'].rolling(window=30).mean()
@@ -77,7 +80,7 @@ except Exception as e:
 # 3. SIDEBAR CONTROLS
 # ==========================================
 with st.sidebar:
-    st.image("https://via.placeholder.com/150x50?text=HMA+LOGO", use_container_width=True) # Replace with HMA Logo URL
+    st.image("https://hma-edu.org/wp-content/uploads/2021/01/HMA-Logo-Color.png", width=150) # HMA Logo
     st.header("CONTROLS")
     pop = st.number_input("Population", value=370, step=10)
     savings_target = st.slider("Goal Target (%)", 0, 30, 10)
@@ -85,12 +88,13 @@ with st.sidebar:
     st.header("STANDARDS")
     st.info("WHO Baseline: 100L/day")
     
-    selected_date = st.selectbox("Select Date", df_master['Date_Clean'].dt.date.unique()[::-1])
+    available_dates = sorted(df_master['Date_Clean'].dt.date.unique(), reverse=True)
+    selected_date = st.selectbox("Select Date", available_dates)
 
 # ==========================================
 # 4. MAIN DASHBOARD UI
 # ==========================================
-st.title("WATER INFRASTRUCTURE DASHBOARD")
+st.title("💧 WATER INFRASTRUCTURE DASHBOARD")
 st.markdown(f"<p style='color: gray;'>HAILE-MANAS ACADEMY | BUILDINGS & GROUNDS | Last Updated: {df_master['Date_Clean'].max().date()}</p>", unsafe_allow_html=True)
 
 # Filter data for selected date
@@ -98,8 +102,8 @@ current_data = df_master[df_master['Date_Clean'].dt.date == selected_date].iloc[
 prod = current_data['Well_Usage_m3']
 cons = current_data['Consumption_m3'] if not np.isnan(current_data['Consumption_m3']) else 0
 lpcd = (cons * 1000) / pop if pop > 0 and cons > 0 else 0
-eff = (cons / prod * 100) if prod > 0 else 0
-loss = prod - cons
+eff = (cons / prod * 100) if prod > 0 and cons > 0 else 0
+loss = prod - cons if cons > 0 else 0
 
 # KPI ROW
 kpi1, kpi2, kpi3 = st.columns(3)
