@@ -1,6 +1,6 @@
 streamlit
-gspread
-google-auth
 pandas
-numpy
 plotly
+st-gsheets-connection
+xlsxwriter
+openpyxl
