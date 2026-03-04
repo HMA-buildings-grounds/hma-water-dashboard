@@ -33,7 +33,7 @@ st.markdown(f"""
     h1, h2, h3 {{ color: {NAVY_BLUE}; font-weight: 800 !important; }}
     [data-testid="stSidebar"] {{ background-color: white; border-right: 1px solid #E2E8F0; }}
     </style>
-    """, unsafe_allow_index=True)
+    """, unsafe_allow_html=True)
 
 # ==========================================
 # 2. DATA ENGINE (MySQL Integration)
