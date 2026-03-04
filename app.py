@@ -2,73 +2,76 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import datetime
 from sqlalchemy import create_engine
 
-# ==========================================
-# 1. PAGE CONFIG & EXECUTIVE BRANDING
-# ==========================================
-st.set_page_config(page_title="HMA Water Dashboard", layout="wide")
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
 
-# Theme Colors
-NAVY_BLUE, HMA_GOLD = "#1B263B", "#A68A64"
-SUCCESS_EMERALD, ALERT_CRIMSON = "#2D6A4F", "#941B0C"
-OFF_WHITE, SLATE_GRAY = "#F8F9FA", "#4A5568"
+# --- EXECUTIVE CSS & BRANDING ---
+st.markdown("""
+    <style>
+    .metric-card { background: #FFFFFF; padding: 20px; border-radius: 10px; border-left: 5px solid #1B263B; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .stApp { background-color: #F4F7F6; }
+    h1 { color: #1B263B; font-weight: 800; margin-bottom: 0px; }
+    .insight-text { font-size: 1.1rem; color: #4A5568; font-style: italic; }
+    </style>
+""", unsafe_allow_html=True)
 
-st.markdown(f"""<style>.stApp {{background-color: {OFF_WHITE};}} h1, h2 {{color: {NAVY_BLUE};}}</style>""", unsafe_allow_html=True)
-
-# ==========================================
-# 2. BULLETPROOF MYSQL CONNECTION
-# ==========================================
+# --- DATA ENGINE ---
 @st.cache_data(ttl=600)
 def load_data():
-    try:
-        # Access secrets directly
-        c = st.secrets["connections"]["mysql"]
-        url = f"mysql+pymysql://{c['username']}:{c['password']}@{c['host']}:{c['port']}/{c['database']}"
-        
-        # TiDB REQUIRES SSL
-        connect_args = {"ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}}
-        engine = create_engine(url, connect_args=connect_args)
-        
-        query = "SELECT log_date, well_usage_m3, booster_reading FROM water_logs ORDER BY log_date ASC"
-        df = pd.read_sql(query, engine)
-        
-        # Clean Data
-        df['log_date'] = pd.to_datetime(df['log_date'])
-        daily = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
-        daily['Consumption_m3'] = daily['booster_reading'].diff()
-        
-        # Filter for post-installation data
-        daily.loc[daily['log_date'] < pd.Timestamp("2026-02-05"), 'Consumption_m3'] = np.nan
-        daily['Rolling_Avg_30d'] = daily['well_usage_m3'].rolling(window=30).mean()
-        daily['Date_Str'] = daily['log_date'].dt.strftime('%Y-%m-%d')
-        return daily
-    except Exception as e:
-        st.error(f"Critical Connection Error: {e}")
-        st.stop()
+    c = st.secrets["connections"]["mysql"]
+    url = f"mysql+pymysql://{c['username']}:{c['password']}@{c['host']}:{c['port']}/{c['database']}"
+    engine = create_engine(url, connect_args={"ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}})
+    df = pd.read_sql("SELECT log_date, well_usage_m3, booster_reading FROM water_logs ORDER BY log_date ASC", engine)
+    
+    df['log_date'] = pd.to_datetime(df['log_date'])
+    daily = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
+    daily['Consumption'] = daily['booster_reading'].diff().fillna(0)
+    daily['Rolling_30d'] = daily['well_usage_m3'].rolling(30).mean()
+    return daily
 
-df_master = load_data()
+df = load_data()
 
-# ==========================================
-# 3. DASHBOARD UI
-# ==========================================
-st.sidebar.title("HMA Water Controls")
-pop = st.sidebar.number_input("Population", value=370)
-target = st.sidebar.slider("Savings Goal (%)", 0, 30, 10)
-selected_date = st.sidebar.selectbox("Date", sorted(df_master['Date_Str'].unique(), reverse=True))
+# --- SIDEBAR: Institutional Context ---
+with st.sidebar:
+    st.image("https://www.hmacademy.org/wp-content/uploads/2022/10/HMA-Logo.png", width=200)
+    st.markdown("### Infrastructure Analytics")
+    pop = st.number_input("Campus Population", 370)
+    
+    st.divider()
+    st.subheader("Resources")
+    st.markdown("[WHO Guidelines (Table 5.1)](https://www.who.int/publications/i/item/9789241549950)")
+    st.markdown("[Sphere Handbook (Ch 6)](https://handbook.spherestandards.org/en/sphere/#ch006)")
+    st.caption("Buildings & Grounds Division | HMA")
 
-st.title("WATER INFRASTRUCTURE DASHBOARD")
-row = df_master[df_master['Date_Str'] == selected_date].iloc[0]
+# --- DASHBOARD LOGIC ---
+latest = df.iloc[-1]
+prod = latest['well_usage_m3']
+avg = latest['Rolling_30d']
 
-# KPIs
-col1, col2, col3 = st.columns(3)
-col1.metric("WHO Std (LPCD)", f"{(row['Consumption_m3']*1000)/pop:.0f} L")
-col2.metric("Efficiency", f"{(row['Consumption_m3']/row['well_usage_m3'])*100:.1f}%")
-col3.metric("Goal", f"{row['well_usage_m3']:.1f} m³")
+# --- MAIN UI ---
+st.title("Water Infrastructure Overview")
+st.write(f"**Latest Operational Data:** {latest['log_date'].strftime('%B %d, %Y')}")
 
-# Charts
+# Insight Module
+variance = prod - avg
+insight = "Operational performance is stable."
+if variance > 15: insight = "⚠️ ALERT: High consumption anomaly detected compared to 30-day average."
+elif variance < -15: insight = "✅ Efficiency milestone: Consumption is significantly below rolling average."
+
+st.markdown(f"<div class='insight-text'><b>Managerial Insight:</b> {insight}</div>", unsafe_allow_html=True)
+
+# KPI Metrics
+k1, k2, k3 = st.columns(3)
+with k1: st.metric("Current Production", f"{prod:.1f} m³", f"{variance:.1f} vs Avg")
+with k2: st.metric("Campus LPCD", f"{(latest['Consumption']*1000)/pop:.0f} L")
+with k3: st.metric("System Load", f"{(prod/avg)*100:.0f}% of Avg")
+
+# Visuals
+st.subheader("Performance Trend Analysis")
 fig = go.Figure()
-fig.add_trace(go.Scatter(x=df_master['log_date'], y=df_master['well_usage_m3'], name="Production", line=dict(color=NAVY_BLUE)))
-fig.add_trace(go.Scatter(x=df_master['log_date'], y=df_master['Rolling_Avg_30d']*(1-target/100), name="Target", line=dict(color=HMA_GOLD, dash='dash')))
+fig.add_trace(go.Scatter(x=df['log_date'], y=df['well_usage_m3'], name="Well Production", line_color="#1B263B", fill='tozeroy'))
+fig.add_trace(go.Scatter(x=df['log_date'], y=df['Rolling_30d'], name="30-Day Baseline", line=dict(color="#A68A64", dash='dash')))
+fig.update_layout(height=400, template="plotly_white", margin=dict(l=0,r=0,t=20,b=0))
 st.plotly_chart(fig, use_container_width=True)
