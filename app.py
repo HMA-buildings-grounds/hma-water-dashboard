@@ -1,202 +1,213 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
-import gspread
-from google.oauth2.service_account import Credentials
 import re
-import datetime
+import io
+from datetime import datetime
 
 # ==========================================
-# 1. PAGE CONFIG & EXECUTIVE BRANDING
+# 1. PAGE CONFIG & PROFESSIONAL UI STYLING
 # ==========================================
-st.set_page_config(page_title="HMA Water Dashboard", layout="wide")
+st.set_page_config(page_title="HMA Infrastructure Dashboard", layout="wide", page_icon="💧")
 
-# Institutional Palette (Executive Theme)
-NAVY_BLUE = "#1B263B"       # Deep Oxford Navy
-HMA_GOLD = "#A68A64"        # Muted Champagne Gold
-SUCCESS_EMERALD = "#2D6A4F" # Forest Emerald
-ALERT_CRIMSON = "#941B0C"   # Iron Crimson
-OFF_WHITE = "#F8F9FA"       # Clean Background
-SLATE_GRAY = "#4A5568"      # Caption Gray
+# HMA Brand Colors
+NAVY_BLUE = "#0f233a"
+HMA_GOLD = "#d4af37"
+SUCCESS_GREEN = "#27ae60"
+ALERT_RED = "#e74c3c"
 
-WHO_BASELINE = 100
-
-# CSS for Institutional Look
+# Custom CSS for Professional UI (Responsive & Clean)
 st.markdown(f"""
     <style>
-    .stApp {{ background-color: {OFF_WHITE}; }}
-    div[data-testid="stMetric"] {{
-        background-color: white;
-        border: 1px solid #E2E8F0;
-        padding: 15px;
-        border-radius: 8px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }}
-    div[data-testid="stMetricLabel"] > div {{
-        color: {SLATE_GRAY} !important;
-        font-weight: 600 !important;
-        text-transform: uppercase;
-        letter-spacing: 0.8px;
-        font-size: 0.8rem;
-    }}
-    h1, h2, h3 {{ color: {NAVY_BLUE}; font-weight: 800 !important; }}
-    [data-testid="stSidebar"] {{ background-color: white; border-right: 1px solid #E2E8F0; }}
+    .main {{ background-color: #f8f9fa; font-family: 'Segoe UI', Tahoma, sans-serif; }}
+    [data-testid="stMetricValue"] {{ font-size: calc(1.5rem + 1.2vw) !important; font-weight: 700 !important; color: {NAVY_BLUE}; }}
+    .stMetric {{ background-color: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.04); border-bottom: 4px solid {HMA_GOLD}; }}
+    h1, h2, h3 {{ color: {NAVY_BLUE}; font-weight: 700; }}
+    .sidebar .sidebar-content {{ background-color: white; }}
+    footer {{visibility: hidden;}}
     </style>
-    """, unsafe_allow_index=True)
+    """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DATA ENGINE (GitHub Secrets Compatible)
+# 2. DATA ENGINE (CRAWLS ALL MONTH TABS)
 # ==========================================
 @st.cache_data(ttl=600)
-def load_hma_data():
-    # Authentication via Streamlit Secrets
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+def load_all_historical_data():
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    url = "https://docs.google.com/spreadsheets/d/1txdEeHqCdlQigNRgOXc2x-w4BVFM0-cqdRSoVSqbEzQ/edit"
     
-    try:
-        # Looks for [gcp_service_account] in Streamlit Cloud Secrets
-        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
-        gc = gspread.authorize(creds)
-        sh = gc.open('HMA Water Usage Log - For Data Analysis')
-    except Exception as e:
-        st.error("Credential Error: Ensure GSheet is shared with the Service Account email and Secrets are set in Streamlit Cloud.")
-        st.stop()
+    all_month_data = []
+    # ዝርዝሩን እስከ ሰኔ 2026 ድረስ አዘጋጅቼዋለሁ፣ አዲስ ታብ በሺቱ ላይ ሲከፈት በራሱ ያነበዋል
+    potential_tabs = [
+        "Water Usage Log (Sep 2025)", "Water Usage Log (Oct 2025)", 
+        "Water Usage Log (Nov 2025)", "Water Usage Log (Dec 2025)", 
+        "Water Usage Log (Jan 2026)", "Water Usage Log (Feb 2026)", 
+        "Water Usage Log (Mar 2026)", "Water Usage Log (Apr 2026)",
+        "Water Usage Log (May 2026)", "Water Usage Log (Jun 2026)"
+    ]
     
-    all_data = []
-    for worksheet in sh.worksheets():
+    for tab_name in potential_tabs:
         try:
-            rows = worksheet.get_all_values()
-            header_idx = next(i for i, row in enumerate(rows) if 'Date' in row)
-            raw_headers = [c.strip() for c in rows[header_idx]]
+            df_raw = conn.read(spreadsheet=url, worksheet=tab_name, header=None)
             
-            # Clean Headers
+            header_idx = 0
+            for i, row in df_raw.iterrows():
+                if 'Date' in [str(v).strip() for v in row.values]:
+                    header_idx = i
+                    break
+            
+            df = df_raw.iloc[header_idx+1:].copy()
+            headers = [str(h).strip() for h in df_raw.iloc[header_idx].values]
+            
             clean_headers = []
-            counts = {}
-            for h in raw_headers:
-                if not h: h = "Unnamed"
-                if h in counts: counts[h]+=1; clean_headers.append(f"{h}_{counts[h]}")
-                else: counts[h]=1; clean_headers.append(h)
-                
-            df = pd.DataFrame(rows[header_idx+1:], columns=clean_headers)
-            df = df[df['Time'].isin(['8:00 AM', '4:00 PM'])].copy()
+            for i, h in enumerate(headers):
+                clean_headers.append(h if h and h != 'None' else f"Col_{i}")
+            df.columns = clean_headers
 
-            def to_num(val):
-                try: return float(re.split(r'\(|\s', str(val))[0])
-                except: return np.nan
+            year = "2026" if "2026" in tab_name else "2025"
+            
+            def parse_date(x):
+                try:
+                    d = str(x).strip()
+                    if not d or d == 'None': return pd.NaT
+                    return pd.to_datetime(f"{d} {year}", errors='coerce')
+                except: return pd.NaT
 
-            usage_col = next((c for c in df.columns if "Usage Since" in c), None)
-            booster_col = next((c for c in df.columns if "Booster" in c and "Reading" in c), None)
+            df['Full_Date'] = df['Date'].apply(parse_date)
+            df = df.dropna(subset=['Full_Date', 'Time'])
 
-            if usage_col: df['Well_Usage_m3'] = df[usage_col].apply(to_num)
-            if booster_col: df['Booster_Reading'] = pd.to_numeric(df[booster_col], errors='coerce')
+            def clean_numeric(x):
+                try:
+                    if isinstance(x, str): return float(re.split(r'\(|\s', x)[0])
+                    return float(x)
+                except: return 0.0
 
-            df = df[(df['Well_Usage_m3'] >= 0) & (df['Well_Usage_m3'] < 1000)]
-            df['Date'] = df['Date'].replace('', np.nan).ffill()
-            year = "2026" if any(x in worksheet.title for x in ["Jan", "Feb"]) else "2025"
-            df['Full_Date'] = pd.to_datetime(df['Date'] + " " + year, errors='coerce')
-            all_data.append(df)
-        except: continue
+            u_col = next((c for c in df.columns if "Usage Since" in c), None)
+            b_col = next((c for c in df.columns if "Booster" in c and "Reading" in c), None)
 
-    final_df = pd.concat(all_data, ignore_index=True).dropna(subset=['Full_Date', 'Well_Usage_m3']).sort_values('Full_Date')
-    daily = final_df.groupby('Full_Date').agg({'Well_Usage_m3':'sum', 'Booster_Reading':'max'}).reset_index()
-    daily['Consumption_m3'] = daily['Booster_Reading'].diff()
+            if u_col: df['Production'] = df[u_col].apply(clean_numeric)
+            if b_col: df['Booster_Read'] = pd.to_numeric(df[b_col], errors='coerce').fillna(0.0)
 
-    # Apply Hard Filter for Meter Install Date
-    install_date = pd.Timestamp("2026-02-05")
-    daily.loc[daily['Full_Date'] < install_date, 'Consumption_m3'] = np.nan
+            all_month_data.append(df[['Full_Date', 'Production', 'Booster_Read']])
+        except:
+            continue
+
+    if not all_month_data:
+        return pd.DataFrame()
+
+    final_df = pd.concat(all_month_data, ignore_index=True)
+    daily = final_df.groupby('Full_Date').agg({'Production':'sum', 'Booster_Read':'max'}).reset_index()
+    daily['Distribution'] = daily['Booster_Read'].diff().fillna(0.0)
     
-    daily['Rolling_Avg_30d'] = daily['Well_Usage_m3'].rolling(window=30).mean()
-    daily['Date_Str'] = daily['Full_Date'].dt.strftime('%Y-%m-%d')
-    return daily
+    daily.loc[daily['Distribution'] < 0, 'Distribution'] = 0
+    daily['Rolling_Avg'] = daily['Production'].rolling(window=7, min_periods=1).mean()
+    
+    return daily.sort_values('Full_Date')
 
-df_master = load_hma_data()
+try:
+    df_master = load_all_historical_data()
+except Exception as e:
+    st.error(f"UI Data Error: {e}")
+    st.stop()
 
 # ==========================================
-# 3. SIDEBAR & NAVIGATION
+# 3. SIDEBAR (LOGO & GUIDELINES)
 # ==========================================
 with st.sidebar:
-    st.image("https://via.placeholder.com/150x50?text=HMA+LOGO", use_container_width=True) # Replace with URL or local path
-    st.markdown(f"<h2 style='color:{NAVY_BLUE}; font-size: 1.2rem;'>CONTROLS</h2>", unsafe_allow_index=True)
+    # 1. Official Logo directly from website
+    st.image("https://images.squarespace-cdn.com/content/v1/594009f6e3df285390772023/1597843477189-L3W6W5XQ4Q3W4Z6V6X4V/HMA_logo_color.jpg", use_container_width=True)
+    st.markdown("<hr style='border: 1px solid #eee;'>", unsafe_allow_html=True)
     
-    pop = st.number_input("Campus Population", value=370, step=10)
-    savings_target = st.slider("Goal Target (%)", 0, 30, 10)
-    selected_date = st.selectbox("Historical View Date", 
-                               options=sorted(df_master['Date_Str'].unique(), reverse=True))
+    st.header("🎛️ CONTROLS")
+    pop = st.number_input("Population", value=370, step=10)
+    goal_val = st.slider("Conservation Goal (%)", 0, 40, 10)
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.header("📋 STANDARDS")
+    st.markdown(f"""
+    <div style="border-left: 5px solid {ALERT_RED}; padding: 15px; background-color: #fdf2f2; border-radius: 0 10px 10px 0;">
+        <p style="color: {ALERT_RED}; font-weight: 800; margin-bottom: 5px; font-size: 15px;">WHO GUIDELINES</p>
+        <p style="font-size: 13px; color: #333; line-height: 1.4;">Ref: Table 5.1, Page 87<br><b>Goal: 100L / Person / Day</b></p>
+    </div>
+    """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.markdown(f"<h2 style='color:{NAVY_BLUE}; font-size: 1.2rem;'>STANDARDS</h2>", unsafe_allow_index=True)
-    st.link_button("WHO Guidelines", "https://www.who.int/publications/i/item/9789241549950")
-    st.link_button("Sphere Handbook", "https://handbook.spherestandards.org/en/sphere/#ch006")
+    dates_list = sorted(df_master['Full_Date'].dt.date.unique(), reverse=True)
+    selected_date = st.selectbox("📅 Select Analysis Date", dates_list)
 
 # ==========================================
-# 4. DATA CALCULATIONS
+# 4. MAIN DASHBOARD UI
 # ==========================================
-current_data = df_master[df_master['Date_Str'] == selected_date].iloc[0]
-prod = current_data['Well_Usage_m3']
-cons = current_data['Consumption_m3']
-eff_cons = cons if not np.isnan(cons) and cons > 0 else 0
+st.title("💧 WATER INFRASTRUCTURE DASHBOARD")
+st.markdown(f"**HAILE-MANAS ACADEMY** | BUILDINGS & GROUNDS | LIVE STATUS")
 
-lpcd = (eff_cons * 1000) / pop if pop and eff_cons > 0 else 0
-efficiency = (eff_cons / prod * 100) if prod > 0 else 0
-loss_volume = prod - eff_cons if prod > 0 else 0
-avg_usage = current_data['Rolling_Avg_30d'] if not np.isnan(current_data['Rolling_Avg_30d']) else prod
-target_vol = avg_usage * (1 - (savings_target/100))
-variance = prod - target_vol
+# Filter for the day
+day_data = df_master[df_master['Full_Date'].dt.date == selected_date].iloc[0]
+p_val = day_data['Production']
+d_val = day_data['Distribution']
+lpcd_val = (d_val * 1000) / pop if d_val > 0 else 0
+eff_val = (d_val / p_val * 100) if p_val > 0 and d_val > 0 else 0
+loss_val = p_val - d_val if p_val > d_val else 0
 
-# ==========================================
-# 5. DASHBOARD UI
-# ==========================================
-st.title("WATER INFRASTRUCTURE DASHBOARD")
-st.markdown(f"**HAILE-MANAS ACADEMY** | BUILDINGS & GROUNDS | UPDATED: `{selected_date}`")
+# --- KPI METRICS ---
+col1, col2, col3 = st.columns(3)
+col1.metric("WHO Standard (LPCD)", f"{lpcd_val:.0f} L", f"{lpcd_val-100:.1f} vs WHO", delta_color="inverse")
+col2.metric("System Efficiency", f"{eff_val:.1f}%", f"{loss_val:.1f} m³ Daily Loss", delta_color="inverse")
+col3.metric("Well Production", f"{p_val:.1f} m³", f"Current Goal: -{goal_val}%")
 
-# KPI ROW
-m1, m2, m3 = st.columns(3)
-m1.metric(label="WHO Optimal Standard", 
-          value=f"{lpcd:.0f} L/c/d", 
-          delta=f"{lpcd - WHO_BASELINE:.1f} vs Goal", 
-          delta_color="inverse")
+st.markdown("<br>", unsafe_allow_html=True)
 
-m2.metric(label="System Efficiency", 
-          value=f"{efficiency:.1f}%", 
-          delta=f"{loss_volume:.1f} m³ Loss", 
-          delta_color="inverse")
+# --- TRENDS & CHARTS ---
+left_c, right_c = st.columns([2, 1])
 
-m3.metric(label=f"Conservation Target (-{savings_target}%)", 
-          value=f"{prod:.1f} m³", 
-          delta=f"{variance:.1f} m³ vs Target", 
-          delta_color="normal" if variance <= 0 else "inverse")
-
-# CHART ROW 1
-c1, c2 = st.columns([2, 1])
-
-with c1:
-    st.subheader("Production Trend vs. Goal")
+with left_c:
+    st.subheader("📈 Annual Water Extraction Trend")
     fig_t = go.Figure()
-    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Well_Usage_m3'], name='Actual Production',
-                               line=dict(color=NAVY_BLUE, width=3), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
-    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Rolling_Avg_30d']*(1-savings_target/100), 
-                               name='Target Goal', line=dict(color=HMA_GOLD, width=2, dash='dot')))
-    fig_t.update_layout(template='plotly_white', height=350, margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=1.1))
+    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Production'], name='Actual',
+                               line=dict(color=NAVY_BLUE, width=4), fill='tozeroy', fillcolor='rgba(15, 35, 58, 0.05)'))
+    fig_t.add_trace(go.Scatter(x=df_master['Full_Date'], y=df_master['Rolling_Avg']*(1-goal_val/100), 
+                               name='Conservation Target', line=dict(color=SUCCESS_GREEN, width=2, dash='dot')))
+    fig_t.update_layout(hovermode="x unified", legend=dict(orientation="h", y=1.1, x=0), height=400, template="plotly_white")
     st.plotly_chart(fig_t, use_container_width=True)
 
-with c2:
-    st.subheader("System Reliability")
+with right_c:
+    st.subheader("🎯 System Recovery Rate")
     fig_g = go.Figure(go.Indicator(
-        mode="gauge+number", value=efficiency,
-        gauge={'axis': {'range': [0, 100], 'tickcolor': NAVY_BLUE},
-               'bar': {'color': NAVY_BLUE},
-               'bgcolor': "white",
-               'steps': [{'range': [0, 70], 'color': '#FEE2E2'}, {'range': [70, 100], 'color': '#D1FAE5'}]}))
-    fig_g.update_layout(height=350, margin=dict(l=20,r=20,t=40,b=20))
+        mode="gauge+number", value=eff_val,
+        number={'suffix': "%", 'font': {'size': 60, 'color': NAVY_BLUE}},
+        gauge={'axis': {'range': [0, 100]}, 'bar': {'color': NAVY_BLUE},
+               'steps': [{'range': [0, 70], 'color': "#fadbd8"},
+                         {'range': [70, 90], 'color': "#fcf3cf"},
+                         {'range': [90, 100], 'color': "#d4efdf"}]}))
+    fig_g.update_layout(height=350, margin=dict(t=50, b=0))
     st.plotly_chart(fig_g, use_container_width=True)
 
-# CHART ROW 2
-st.subheader("Daily Distribution Balance (Verified Consumption vs. Total Production)")
-fig_b = go.Figure()
-fig_b.add_trace(go.Bar(x=df_master['Full_Date'], y=df_master['Well_Usage_m3'], name='Total Pumped (Well)', marker_color='#E2E8F0'))
-fig_b.add_trace(go.Bar(x=df_master['Full_Date'], y=df_master['Consumption_m3'], name='Verified Usage (Booster)', marker_color=NAVY_BLUE))
-
-fig_b.add_vline(x=datetime.datetime(2026, 2, 5).timestamp() * 1000, line_width=2, line_dash="dot", line_color=HMA_GOLD)
-fig_b.update_layout(barmode='overlay', template='plotly_white', height=300, 
-                  margin=dict(l=0,r=0,t=0,b=0), legend=dict(orientation="h", y=1.1, x=0))
+# FULL HISTORY BAR CHART
+st.subheader("📊 Historical Distribution Balance (m³)")
+fig_b = px.bar(df_master, x='Full_Date', y=['Production', 'Distribution'], 
+             barmode='group', labels={'value': 'm³', 'variable': 'Category'},
+             color_discrete_map={'Production': '#cfd8dc', 'Distribution': NAVY_BLUE})
+fig_b.update_layout(height=400, template="plotly_white", legend=dict(orientation="h", y=1.1, x=0))
 st.plotly_chart(fig_b, use_container_width=True)
+
+# ==========================================
+# 5. DOWNLOAD HUB (EXCEL & CSV)
+# ==========================================
+st.markdown("---")
+st.subheader("📥 Export Infrastructure Reports")
+csv_col, xlsx_col = st.columns(2)
+
+# CSV Download
+csv_data = df_master.to_csv(index=False).encode('utf-8')
+csv_col.download_button("Download CSV Dataset", data=csv_data, file_name=f"HMA_Water_Report_{selected_date}.csv", mime='text/csv', use_container_width=True)
+
+# Excel Download
+excel_buffer = io.BytesIO()
+with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+    df_master.to_excel(writer, index=False, sheet_name='HMA_Infrastructure_Data')
+xlsx_col.download_button("Download Excel Master File", data=excel_buffer.getvalue(), file_name="HMA_Full_Water_Report.xlsx", mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', use_container_width=True)
+
+st.caption(f"System Ready | Refreshed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Version 4.1")
