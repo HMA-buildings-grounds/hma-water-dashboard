@@ -45,3 +45,30 @@ def load_data():
         daily['Date_Str'] = daily['log_date'].dt.strftime('%Y-%m-%d')
         return daily
     except Exception as e:
+        st.error(f"Critical Connection Error: {e}")
+        st.stop()
+
+df_master = load_data()
+
+# ==========================================
+# 3. DASHBOARD UI
+# ==========================================
+st.sidebar.title("HMA Water Controls")
+pop = st.sidebar.number_input("Population", value=370)
+target = st.sidebar.slider("Savings Goal (%)", 0, 30, 10)
+selected_date = st.sidebar.selectbox("Date", sorted(df_master['Date_Str'].unique(), reverse=True))
+
+st.title("WATER INFRASTRUCTURE DASHBOARD")
+row = df_master[df_master['Date_Str'] == selected_date].iloc[0]
+
+# KPIs
+col1, col2, col3 = st.columns(3)
+col1.metric("WHO Std (LPCD)", f"{(row['Consumption_m3']*1000)/pop:.0f} L")
+col2.metric("Efficiency", f"{(row['Consumption_m3']/row['well_usage_m3'])*100:.1f}%")
+col3.metric("Goal", f"{row['well_usage_m3']:.1f} m³")
+
+# Charts
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=df_master['log_date'], y=df_master['well_usage_m3'], name="Production", line=dict(color=NAVY_BLUE)))
+fig.add_trace(go.Scatter(x=df_master['log_date'], y=df_master['Rolling_Avg_30d']*(1-target/100), name="Target", line=dict(color=HMA_GOLD, dash='dash')))
+st.plotly_chart(fig, use_container_width=True)
