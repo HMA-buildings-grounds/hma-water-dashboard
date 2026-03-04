@@ -60,7 +60,7 @@ eff = curr['Efficiency']
 loss = prod - dist if prod > dist else 0
 
 # --- MAIN UI ---
-st.title("WATER INFRASTRUCTURE EXECUTIVE REPORT")
+st.title("WATER INFRASTRUCTURE DASHBOARD")
 
 # KPI ROW
 c1, c2, c3, c4 = st.columns(4)
