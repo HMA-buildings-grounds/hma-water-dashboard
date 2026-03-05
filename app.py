@@ -1,99 +1,141 @@
 import streamlit as st
+from streamlit_option_menu import option_menu
 import pandas as pd
-import numpy as np
+import plotly.express as px
 import plotly.graph_objects as go
+import gspread
+from google.oauth2.service_account import Credentials
 from sqlalchemy import create_engine
-import os
+import io
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="HMA Water Intelligence", layout="wide", page_icon="💧")
+# --- 1. SETTINGS & THEMING ---
+st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
-# --- EXECUTIVE THEME ---
-COLORS = {"navy": "#1B263B", "gold": "#A68A64", "success": "#2D6A4F", "alert": "#941B0C", "bg": "#F8F9FA"}
-
-st.markdown(f"""
+# Professional UI Styling (Navy/Teal/Slate)
+st.markdown("""
     <style>
-    .stApp {{background-color: {COLORS['bg']};}}
-    .metric-card {{background: white; padding: 20px; border-radius: 12px; border: 1px solid #E2E8F0; box-shadow: 0 4px 6px rgba(0,0,0,0.05);}}
-    h1 {{color: {COLORS['navy']}; font-weight: 800; margin-bottom: 20px;}}
-    .diag-box {{padding: 15px; border-radius: 8px; margin-bottom: 20px;}}
+    .main { background-color: #F8FAFC; }
+    div[data-testid="stMetricValue"] { color: #0D9488; font-size: 32px; font-weight: 700; }
+    .stButton>button { border-radius: 8px; background-color: #0D9488; color: white; }
+    [data-testid="stSidebar"] { background-color: #1B263B; border-right: 1px solid #e2e8f0; }
     </style>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
 
-# --- DATA ENGINE ---
-@st.cache_data(ttl=600)
-def load_data():
-    c = st.secrets["connections"]["mysql"]
-    url = f"mysql+pymysql://{c['username']}:{c['password']}@{c['host']}:{c['port']}/{c['database']}"
-    connect_args = {"ssl": {"ca": "/etc/ssl/certs/ca-certificates.crt"}}
-    engine = create_engine(url, connect_args=connect_args)
-    
-    df = pd.read_sql("SELECT log_date, well_usage_m3, booster_reading FROM water_logs ORDER BY log_date ASC", engine)
-    df['log_date'] = pd.to_datetime(df['log_date'])
-    df = df.groupby('log_date').agg({'well_usage_m3':'sum', 'booster_reading':'max'}).reset_index()
-    df['Distribution'] = df['booster_reading'].diff().fillna(0)
-    df['Efficiency'] = (df['Distribution'] / df['well_usage_m3'].replace(0, np.nan)) * 100
-    return df
+# --- 2. DATA ENGINES (TiDB & Google Sheets) ---
 
-df = load_data()
+@st.cache_resource
+def get_tidb_engine():
+    # Credentials from .streamlit/secrets.toml
+    creds = st.secrets["tidb"]
+    url = f"mysql+mysqlconnector://{creds['user']}:{creds['password']}@{creds['host']}:{creds['port']}/{creds['database']}?ssl_disabled=False"
+    return create_engine(url)
 
-# --- SIDEBAR ---
+@st.cache_resource
+def get_gspread_client():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+    return gspread.authorize(creds)
+
+def fetch_all_google_sheets(spreadsheet_id):
+    client = get_gspread_client()
+    sh = client.open_by_key(spreadsheet_id)
+    all_sheets_data = {}
+    for worksheet in sh.worksheets():
+        df = pd.DataFrame(worksheet.get_all_records())
+        all_sheets_data[worksheet.title] = df
+    return all_sheets_data
+
+# --- 3. SIDEBAR NAVIGATION ---
 with st.sidebar:
-    if os.path.exists("assets/HMA_logo_color.jpg"):
-        st.image("assets/HMA_logo_color.jpg", use_container_width=True)
-    
-    st.markdown("## Operational Controls")
-    pop = st.number_input("Campus Population", 370)
-    target = st.slider("Conservation Target (%)", 0, 75, 10)
-    sel_date = st.selectbox("Operational Date", df['log_date'].dt.date.unique()[::-1])
-    
+    st.image("https://via.placeholder.com/150x50?text=HMA+LOGO", use_column_width=True) # Place your logo here
+    selected = option_menu(
+        "Main Menu", 
+        ["Home", "Consumption Logs", "Gallery"], 
+        icons=["house", "cloud-download", "images"], 
+        menu_icon="cast", 
+        default_index=0,
+        styles={
+            "container": {"background-color": "#1B263B", "padding": "5px"},
+            "icon": {"color": "#0D9488", "font-size": "18px"}, 
+            "nav-link": {"color": "white", "font-size": "14px", "text-align": "left", "margin":"0px"},
+            "nav-link-selected": {"background-color": "#415A77"},
+        }
+    )
     st.divider()
-    st.markdown("### Resources")
-    st.markdown("• [WHO Guidelines (Table 5.1)](https://www.who.int/publications/i/item/9789241549950)")
-    st.markdown("• [Sphere Handbook (Ch 6)](https://handbook.spherestandards.org/en/sphere/#ch006)")
+    if st.sidebar.button("🔄 Global Refresh"):
+        st.cache_data.clear()
+        st.rerun()
 
-# --- DASHBOARD LOGIC ---
-curr = df[df['log_date'].dt.date == sel_date].iloc[0]
-prod = curr['well_usage_m3']
-dist = curr['Distribution']
-eff = curr['Efficiency']
-loss = prod - dist if prod > dist else 0
+# --- 4. VIEW LOGIC ---
 
-# --- MAIN UI ---
-st.title("WATER INFRASTRUCTURE DASHBOARD")
+if selected == "Home":
+    st.title("Campus Water Management Dashboard")
+    
+    # KPI SECTION
+    col1, col2, col3, col4 = st.columns(4)
+    with col1: st.metric("Daily Production", "4,250 kL", "+2.5%")
+    with col2: st.metric("Facility Consumption", "3,120 kL", "-1.2%")
+    with col3: st.metric("Active Wells", "8 / 10", "Operational")
+    with col4: st.metric("System Health", "94%", "High")
 
-# KPI ROW
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Well Production", f"{prod:.1f} m³")
-c2.metric("Efficiency Ratio", f"{eff:.1f}%", delta=f"{eff - 80:.1f}% vs Target" if eff < 80 else None, delta_color="inverse")
-c3.metric("Per Capita", f"{(dist*1000)/pop:.0f} L/c/d")
-c4.metric("Water Loss (Leakage)", f"{loss:.1f} m³", delta="High Loss" if loss > 20 else None, delta_color="inverse")
+    # TREND SECTION (Mock Data - Replace with TiDB Query)
+    st.subheader("Production vs Consumption Trends")
+    df_trend = pd.DataFrame({
+        'Date': pd.date_range(start='2024-01-01', periods=12, freq='M'),
+        'Production': [400, 450, 420, 500, 550, 600, 580, 590, 610, 630, 650, 640],
+        'Consumption': [380, 400, 390, 450, 480, 500, 490, 510, 530, 550, 570, 560]
+    })
+    fig = px.area(df_trend, x='Date', y=['Production', 'Consumption'], 
+                  color_discrete_map={"Production": "#0D9488", "Consumption": "#415A77"},
+                  template="plotly_white")
+    st.plotly_chart(fig, use_container_width=True)
 
-# DIAGNOSTICS
-st.subheader("Operational Diagnostics")
-if eff < 70:
-    st.error("🚨 CRITICAL: Efficiency below 70%. Immediate inspection of distribution network required.")
-elif eff < 85:
-    st.warning("⚠️ CAUTION: Efficiency suboptimal. Minor leakage likely present.")
-else:
-    st.success("✅ System Status: Normal operational range.")
+elif selected == "Consumption Logs":
+    st.title("Water Production & Facility Logs")
+    
+    # 1. Fetch data from EVERY sheet
+    try:
+        sheets_dict = fetch_all_google_sheets(st.secrets["google_sheets"]["spreadsheet_id"])
+        
+        # 2. Selector for which sheet to view
+        target_sheet = st.selectbox("Select Facility Sheet", options=list(sheets_dict.keys()))
+        df = sheets_dict[target_sheet]
 
-# ADVANCED VISUALIZATION
-fig = go.Figure()
-# Production Bars
-fig.add_trace(go.Bar(x=df['log_date'], y=df['well_usage_m3'], name="Production", marker_color=COLORS['navy']))
-# Distribution Line
-fig.add_trace(go.Scatter(x=df['log_date'], y=df['Distribution'], name="Distribution", line=dict(color=COLORS['gold'], width=3)))
-# Leakage Gap Fill
-fig.add_trace(go.Scatter(x=df['log_date'], y=df['well_usage_m3'], name="Water Loss (Potential Leak)", 
-                         fill='tonexty', fillcolor='rgba(148, 27, 12, 0.2)', line=dict(width=0)))
+        # 3. Filters
+        col_f1, col_f2 = st.columns(2)
+        with col_f1:
+            date_range = st.date_input("Filter by Date Range", [])
+        
+        # 4. Professional Table View
+        st.dataframe(df, use_container_width=True, hide_index=True)
 
-fig.update_layout(template="plotly_white", margin=dict(l=0,r=0,t=20,b=0), hovermode="x unified", legend=dict(orientation="h", y=1.1))
-st.plotly_chart(fig, use_container_width=True)
+        # 5. DOWNLOAD SECTION (Excel / CSV)
+        st.subheader("📥 Export Center")
+        d_col1, d_col2, d_col3 = st.columns(3)
+        
+        # CSV Download
+        csv = df.to_csv(index=False).encode('utf-8')
+        d_col1.download_button("Download CSV", data=csv, file_name=f"{target_sheet}_log.csv", mime="text/csv")
 
-# GAUGE
-fig_g = go.Figure(go.Indicator(
-    mode="gauge+number", value=eff, title={'text': "Efficiency %"},
-    gauge={'axis': {'range': [0, 100]}, 'bar': {'color': COLORS['navy']}, 
-           'steps': [{'range': [0, 70], 'color': '#FEE2E2'}, {'range': [70, 85], 'color': '#FEF9C3'}]}))
-st.plotly_chart(fig_g, use_container_width=True)
+        # Multi-sheet Excel Download
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            for name, data in sheets_dict.items():
+                data.to_excel(writer, sheet_name=name[:31], index=False)
+        d_col2.download_button("Download All Sheets (Excel)", data=output.getvalue(), file_name="Campus_Water_Full_Log.xlsx")
+        
+        # PDF Links (WHO References)
+        d_col3.link_button("WHO Water Quality Standards (PDF)", "https://www.who.int/publications/i/item/9789241549950")
+
+    except Exception as e:
+        st.error(f"Error connecting to Google Sheets: {e}")
+
+elif selected == "Gallery":
+    st.title("Facility Documentation Gallery")
+    # Responsive Grid for Photos
+    gal_cols = st.columns(3)
+    # Placeholder images - replace with your actual facility URLs or local paths
+    for i in range(6):
+        with gal_cols[i % 3]:
+            st.image("https://via.placeholder.com/400x300?text=Well+Site+"+str(i+1), 
+                     caption=f"Facility Site {i+1} - Status: Operational", use_column_width=True)
