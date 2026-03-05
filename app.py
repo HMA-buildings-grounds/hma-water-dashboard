@@ -178,3 +178,23 @@ with r_col:
 st.divider()
 st.subheader("📋 Verification Data Log")
 st.dataframe(master, use_container_width=True)
+
+# Data Download Section
+st.divider()
+st.subheader("📥 Data Download Center")
+if raw_data:
+    # Use raw_data keys for the dropdown, so users select the actual original sheet names
+    sel = st.selectbox("Select Log for Download", list(raw_data.keys()))
+    df_dl = pd.DataFrame(raw_data[sel])
+    c1, c2 = st.columns(2)
+    c1.download_button("💾 Download CSV", df_dl.to_csv(index=False), f"{sel}.csv")
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        df_dl.to_excel(writer, index=False)
+    c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel}.xlsx")
+
+
+
+# Developer Transparency Log (so you can see the math worked)
+with st.expander("🛠️ View Calculated Background Math (Engineering Verification)"):
+    st.dataframe(master_df)
