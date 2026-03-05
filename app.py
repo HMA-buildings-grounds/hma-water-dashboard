@@ -7,7 +7,7 @@ import requests
 import io
 from datetime import datetime
 
-# --- 1. SETTINGS & BRANDING ---
+# --- 1. SETTINGS & PROFESSIONAL THEME ---
 st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
 st.markdown("""
@@ -20,7 +20,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=2) # Near-instant refresh
+@st.cache_data(ttl=2)
 def fetch_live_data():
     try:
         api_url = st.secrets["google_sheets"]["api_url"]
@@ -39,10 +39,8 @@ with st.sidebar:
     campus_pop = st.number_input("Campus Population", value=370, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
     
-    # CALENDAR SELECTION
-    selected_date = st.date_input("Operational Date", value=datetime.now())
-    # Convert selected date to string ID for exact matching
-    date_id = selected_date.strftime('%Y-%m-%d')
+    # Calendar Input
+    selected_op_date = st.date_input("Operational Date", value=datetime.now())
     
     st.divider()
     st.markdown("### 📖 Standards & References")
@@ -60,7 +58,6 @@ raw_data = fetch_live_data()
 main_df = pd.DataFrame()
 prod_col, cons_col, date_col = None, None, None
 
-# Find the valid data sheet
 for sheet_name, rows in raw_data.items():
     temp_df = pd.DataFrame(rows)
     if not temp_df.empty:
@@ -73,113 +70,107 @@ for sheet_name, rows in raw_data.items():
             prod_col, cons_col, date_col = p_match[0], c_match[0], d_match[0]
             break
 
-# Initialize display variables
+# Initialize Variables
 p_val, c_val, lpcd, eff = 0, 0, 0, 0
 daily_df = pd.DataFrame()
 
 if not main_df.empty:
-    # A. Normalize Dates in the DataFrame to 'YYYY-MM-DD' strings
-    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce')
-    main_df['date_str'] = main_df[date_col].dt.strftime('%Y-%m-%d')
+    # 1. FORCE DATE CONVERSION (Handling "Mar 1" as 2026)
+    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce', dayfirst=False)
+    # Correct Year if spreadsheet only says "Mar 1"
+    main_df[date_col] = main_df[date_col].apply(lambda d: d.replace(year=2026) if d and d.year < 2026 else d)
+    main_df[date_col] = main_df[date_col].dt.date
     
-    # B. Clean Numbers
+    # 2. CLEAN NUMBERS
     main_df[prod_col] = pd.to_numeric(main_df[prod_col], errors='coerce').fillna(0)
     main_df[cons_col] = pd.to_numeric(main_df[cons_col], errors='coerce').fillna(0)
     
-    # C. Filter for "Daily Totals" (Rows where production is recorded)
-    daily_df = main_df[main_df[prod_col] > 0].sort_values(by=date_col).copy()
+    # 3. AGGREGATE BY DATE (Take Max to get the daily total)
+    daily_df = main_df.groupby(date_col).agg({prod_col: 'max', cons_col: 'max'}).reset_index()
+    daily_df = daily_df[daily_df[prod_col] > 0].sort_values(by=date_col)
     
-    # D. MATCH DATA TO SELECTED DATE
-    selected_row = daily_df[daily_df['date_str'] == date_id]
-    
-    if not selected_row.empty:
-        match = selected_row.iloc[-1]
-        p_val, c_val = match[prod_col], match[cons_col]
+    # 4. FETCH SELECTED DATE
+    match = daily_df[daily_df[date_col] == selected_op_date]
+    if not match.empty:
+        row = match.iloc[0]
+        p_val, c_val = row[prod_col], row[cons_col]
         lpcd = (c_val * 1000) / campus_pop
         eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
-    else:
-        # If no data for selected date, show 0 to alert user data is missing
-        p_val, c_val, lpcd, eff = 0, 0, 0, 0
 
-# --- 4. CALCULATION TOOLTIPS ---
-lpcd_help = f"Formula: (Consumption [{c_val} m³] × 1000) ÷ Pop [{campus_pop}] = {lpcd:.1f} LPCD."
-eff_help = f"Formula: (Target [{target_lpcd}] ÷ Actual [{lpcd:.1f}]) × 100 = {eff:.1f}%."
-prod_help = f"Formula: Total volume extracted from well meter for this specific date = {p_val} m³."
+# Tooltip Calculations
+lpcd_h = f"Calculation: (Cons. [{c_val} m³] × 1000) ÷ Pop. [{campus_pop}] = {lpcd:.1f} LPCD."
+eff_h = f"Calculation: (Target [{target_lpcd}] ÷ Actual [{lpcd:.1f}]) × 100 = {eff:.1f}% Efficiency."
+prod_h = f"Calculation: Total volume extracted from well meter for {selected_op_date} = {p_val} m³."
 
-# --- 5. UI VIEW ---
+# --- 4. PERFORMANCE DASHBOARD VIEW ---
 st.title("Operational Diagnostics & Performance")
 
-if p_val == 0 and not main_df.empty:
-    st.warning(f"⚠️ No production data found for {date_id} in the spreadsheet. Displaying 0.0.")
+if p_val == 0 and not daily_df.empty:
+    st.warning(f"⚠️ No data found for {selected_op_date}. Please select a date with recorded totals.")
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
-k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_help)
-k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
+k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_h)
+k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_h)
+k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_h)
 
 st.divider()
 
 v_left, v_right = st.columns([2.2, 0.8])
 
 with v_left:
-    st.subheader(f"Operational Diagnostics Trend (Viewing: {date_id})")
+    # 5. REVERTED TO DROPDOWN VISUALIZATION
+    chart_view = st.selectbox("Select Performance View", 
+                              ["Daily LPCD Index (Target vs Actual)", "Usage Trend (Consumption)", "Production Trend", "Efficiency Trend"])
     
     if not daily_df.empty:
-        daily_df['lpcd_plot'] = (daily_df[cons_col] * 1000) / campus_pop
+        daily_df['lpcd_calc'] = (daily_df[cons_col] * 1000) / campus_pop
+        daily_df['efficiency'] = (target_lpcd / daily_df['lpcd_calc'] * 100).fillna(0)
         
-        # Area Chart Construction (SaaS Style)
+        # Color Palette
+        L_BLUE, L_GREEN, L_ORANGE = "#85C1E9", "#82E0AA", "#F8C471"
+
         fig = go.Figure()
 
-        # Full Trend Line (Smoothed Spline)
-        fig.add_trace(go.Scatter(
-            x=daily_df[date_col], y=daily_df['lpcd_plot'],
-            mode='lines', line_shape='spline',
-            name='Historical LPCD', line=dict(width=4, color='rgba(13, 148, 136, 0.5)'),
-            fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
-        ))
+        if "LPCD" in chart_view:
+            # Overlapping Curved Area Style (SaaS Image Style)
+            fig.add_trace(go.Scatter(x=daily_df[date_col], y=daily_df['lpcd_calc'], mode='lines', line_shape='spline', name='Actual LPCD', line=dict(width=4, color=L_BLUE), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=daily_df[date_col], y=[target_lpcd]*len(daily_df), name="WHO Target", line=dict(color="#1B263B", dash='dash', width=2)))
+        
+        elif "Usage" in chart_view:
+            fig.add_trace(go.Scatter(x=daily_df[date_col], y=daily_df[cons_col], mode='lines', line_shape='spline', name='Consumption', line=dict(width=4, color=L_BLUE), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
 
-        # WHO Baseline
-        fig.add_trace(go.Scatter(
-            x=daily_df[date_col], y=[target_lpcd]*len(daily_df),
-            name="WHO Target", line=dict(color="#1B263B", dash='dash', width=2)
-        ))
+        elif "Production" in chart_view:
+            fig.add_trace(go.Scatter(x=daily_df[date_col], y=daily_df[prod_col], mode='lines', line_shape='spline', name='Production', line=dict(width=4, color=L_ORANGE), fill='tozeroy', fillcolor='rgba(248, 196, 113, 0.2)'))
+        
+        else: # Efficiency
+            fig.add_trace(go.Scatter(x=daily_df[date_col], y=daily_df['efficiency'], mode='lines', line_shape='spline', name='Efficiency %', line=dict(width=4, color=L_GREEN), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
 
-        # Selected Day Highlighter
+        # Highlight Selected Point
         if p_val > 0:
-            fig.add_trace(go.Scatter(
-                x=[selected_date], y=[lpcd],
-                mode='markers+text', name="Selected Day",
-                text=[f"Current: {lpcd:.1f}"], textposition="top center",
-                marker=dict(color='#1B263B', size=18, line=dict(width=3, color='white'))
-            ))
+            fig.add_trace(go.Scatter(x=[selected_op_date], y=[lpcd if "LPCD" in chart_view else (eff if "Efficiency" in chart_view else (p_val if "Production" in chart_view else c_val))], mode='markers', name="Selected Day", marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))))
 
-        fig.update_layout(
-            template="plotly_white", height=480,
-            xaxis=dict(showgrid=False, title="Timeline"),
-            yaxis=dict(title="Liters per Capita"),
-            margin=dict(l=0, r=0, t=20, b=0),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-        )
+        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
 
 with v_right:
+    # 1. PROFESSIONAL NEEDLE GAUGE
     st.markdown("### Efficiency Status")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = eff,
-        gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#1B263B"},
+        gauge = {'axis': {'range': [0, 100]}, 'bar': {'color': "#1B263B", 'thickness': 0.2},
                  'steps': [{'range': [0, 50], 'color': "#FFEBEE"}, {'range': [50, 85], 'color': "#FFF9C4"}, {'range': [85, 100], 'color': "#E8F5E9"}]}))
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# Data Download Section
+# Data Download Center
 st.divider()
 st.subheader("📥 Data Download Center")
 if raw_data:
     sel = st.selectbox("Select Log for Download", list(raw_data.keys()))
-    df_sel = pd.DataFrame(raw_data[sel])
-    c_csv, c_xls = st.columns(2)
-    c_csv.download_button("💾 Download CSV", df_sel.to_csv(index=False), f"{sel}.csv")
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        df_sel.to_excel(writer, index=False)
-    c_xls.download_button("📂 Download Excel", buffer.getvalue(), f"{sel}.xlsx")
+    df_dl = pd.DataFrame(raw_data[sel])
+    c1, c2 = st.columns(2)
+    c1.download_button("💾 Download CSV", df_dl.to_csv(index=False), f"{sel}.csv")
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        df_dl.to_excel(writer, index=False)
+    c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel}.xlsx")
