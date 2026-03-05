@@ -6,9 +6,9 @@ import plotly.graph_objects as go
 import requests
 import io
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# --- 1. SETTINGS & THEME ---
+# --- 1. SETTINGS & BRANDING ---
 st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
 st.markdown("""
@@ -16,8 +16,8 @@ st.markdown("""
     .main { background-color: #F8FAFC; }
     [data-testid="stSidebar"] { background-color: #1B263B !important; }
     [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label { color: white !important; }
-    [data-testid="stMetricValue"] { color: #1B263B; font-size: 38px; font-weight: 800; }
-    .stMetric { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    [data-testid="stMetricValue"] { color: #1B263B; font-size: 32px; font-weight: 800; }
+    .stMetric { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
@@ -29,7 +29,7 @@ def fetch_live_data():
     except:
         return {}
 
-# --- 2. SIDEBAR ---
+# --- 2. SIDEBAR: OPERATIONAL CONTROLS ---
 with st.sidebar:
     try:
         st.image("assets/HMA_logo_color.jpg", use_container_width=True)
@@ -39,7 +39,7 @@ with st.sidebar:
     st.markdown("### Operational Controls")
     campus_pop = st.number_input("Campus Population", value=250, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
-    selected_op_date = st.date_input("Operational Date", value=datetime(2025, 12, 12)) # Default to your data date for testing
+    selected_op_date = st.date_input("Operational Date", value=datetime(2025, 12, 12)) # Example date
     
     st.divider()
     st.markdown("### 📖 Standards & References")
@@ -52,20 +52,20 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. RE-ENGINEERED DATA CALCULATOR ---
+# --- 3. DATA WRANGLING ENGINE (Daytime/Overnight Logic) ---
 raw_data = fetch_live_data()
 
-def build_hma_master(data_dict):
-    all_combined = []
+def wrangle_hma_data(data_dict):
+    all_readings = []
     for sheet_name, rows in data_dict.items():
         df = pd.DataFrame(rows)
         if df.empty: continue
         
-        # Extract year from sheet name (e.g., "Sep 2025" -> 2025)
-        year_match = re.search(r'20\d{2}', sheet_name)
-        sheet_year = year_match.group(0) if year_match else "2026"
+        # Determine Year from Sheet Title (e.g., "Jan 2026")
+        year_search = re.search(r'20\d{2}', sheet_name)
+        year_str = year_search.group(0) if year_search else "2025"
         
-        # Clean columns
+        # Standardize Columns
         df.columns = [str(c).strip() for c in df.columns]
         d_col = next((c for c in df.columns if "Date" in c), None)
         t_col = next((c for c in df.columns if "Time" in c), None)
@@ -73,89 +73,93 @@ def build_hma_master(data_dict):
         
         if all([d_col, t_col, m_col]):
             df = df[[d_col, t_col, m_col]].copy()
-            df.columns = ['DateRaw', 'TimeRaw', 'Reading']
-            # Create full timestamp
-            df['Timestamp'] = pd.to_datetime(df['DateRaw'].astype(str) + " " + sheet_year + " " + df['TimeRaw'].astype(str), errors='coerce')
+            df.columns = ['Date', 'Time', 'Reading']
+            # Create a real Timestamp for cross-month sorting
+            df['Timestamp'] = pd.to_datetime(df['Date'].astype(str) + " " + year_str + " " + df['Time'].astype(str), errors='coerce')
             df['Reading'] = pd.to_numeric(df['Reading'], errors='coerce')
-            all_combined.append(df.dropna(subset=['Timestamp', 'Reading']))
+            all_readings.append(df.dropna())
 
-    if not all_combined: return pd.DataFrame()
+    if not all_readings: return pd.DataFrame()
 
-    # Sort globally by time
-    full_log = pd.concat(all_combined).sort_values('Timestamp').reset_index(drop=True)
+    # Sort everything globally (Corrects month-to-month gaps)
+    full_timeline = pd.concat(all_readings).sort_values('Timestamp').reset_index(drop=True)
     
-    # CALCULATE USAGE (Current Reading minus Previous Reading)
-    full_log['Usage'] = full_log['Reading'].diff()
+    # CALCULATE DELTA: Reading[N] - Reading[N-1]
+    full_timeline['Usage_m3'] = full_timeline['Reading'].diff()
+    full_timeline['DateOnly'] = full_timeline['Timestamp'].dt.date
     
-    # Identify Time Periods
-    full_log['Period'] = full_log['TimeRaw'].apply(lambda x: 'Daytime' if '4:00' in str(x) else 'Overnight')
-    full_log['DateOnly'] = full_log['Timestamp'].dt.date
-    
-    # Pivot to Daily Summary
-    daily_summary = []
-    for date, group in full_log.groupby('DateOnly'):
-        ov = group[group['Period'] == 'Overnight']['Usage'].sum()
-        dt = group[group['Period'] == 'Daytime']['Usage'].sum()
-        daily_summary.append({
+    # CLASSIFY: 8 AM reading is "Overnight" (from previous 4PM); 4 PM is "Daytime"
+    processed_days = []
+    for date, group in full_timeline.groupby('DateOnly'):
+        overnight = group[group['Time'].str.contains('8:00', na=False)]['Usage_m3'].sum()
+        daytime = group[group['Time'].str.contains('4:00', na=False)]['Usage_m3'].sum()
+        
+        processed_days.append({
             'Date': date,
-            'Overnight': ov,
-            'Daytime': dt,
-            'Total': ov + dt
+            'Daytime': daytime,
+            'Overnight': overnight,
+            'Total_24h': daytime + overnight
         })
-    
-    return pd.DataFrame(daily_summary)
+        
+    return pd.DataFrame(processed_days)
 
-master_df = build_hma_master(raw_data)
+master_df = wrangle_hma_data(raw_data)
 
-# --- 4. MATCHING LOGIC ---
-ov_val, dt_val, total_val, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
+# --- 4. CALCULATION & HIGHLIGHTING ---
+ov_val, dt_val, tot_val, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
 if not master_df.empty:
     match = master_df[master_df['Date'] == selected_op_date]
     if not match.empty:
         res = match.iloc[0]
-        ov_val, dt_val, total_val = res['Overnight'], res['Daytime'], res['Total']
-        lpcd = (total_val * 1000) / campus_pop
+        ov_val, dt_val, tot_val = res['Overnight'], res['Daytime'], res['Total_24h']
+        lpcd = (tot_val * 1000) / campus_pop
         eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
 
-# Tooltips
-lpcd_h = f"({total_val} m³ × 1000) / {campus_pop} pop = {lpcd:.1f} LPCD"
-eff_h = f"({target_lpcd} Target / {lpcd:.1f} Actual) × 100 = {eff:.1f}%"
+# Calculations for tooltips
+ov_help = f"Usage between previous 4:00 PM and today's 8:00 AM."
+dt_help = f"Usage between 8:00 AM and 4:00 PM today."
+tot_help = f"Aggregate well production for the full 24-hour cycle."
+lpcd_help = f"Calculation: ({tot_val} m³ × 1000) / {campus_pop} pop = {lpcd:.1f} LPCD."
 
 # --- 5. UI VIEW ---
 st.title("Operational Diagnostics & Performance")
 
-if total_val == 0:
-    st.warning(f"⚠️ No data found for {selected_op_date}. Please select a valid date from the logs.")
+if tot_val == 0:
+    st.warning(f"⚠️ No data found for {selected_op_date}. Please select a date with recorded meter readings.")
 
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Overnight Use", f"{ov_val:.1f} m³", "8:00 AM Delta")
-k2.metric("Daytime Use", f"{dt_val:.1f} m³", "4:00 PM Delta")
-k3.metric("Total 24h Production", f"{total_val:.1f} m³", help=f"Sum: {ov_val} + {dt_val}")
-k4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_h)
+# Metrics Row
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Overnight Usage", f"{ov_val:.1f} m³", help=ov_help)
+c2.metric("Daytime Usage", f"{dt_val:.1f} m³", help=dt_help)
+c3.metric("Total 24h Usage", f"{tot_val:.1f} m³", help=tot_help)
+c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
 
 st.divider()
 
 v_left, v_right = st.columns([2.2, 0.8])
 
 with v_left:
-    chart_view = st.selectbox("Select Trend View", ["Usage Analysis (Overlapping Day/Night)", "Total LPCD Index", "System Efficiency Trend"])
+    # REVERTED TO DROPDOWN TREND VIEW
+    chart_view = st.selectbox("Select Performance Trend", 
+                              ["Overlapping Usage (Day vs Night)", "Total LPCD Index (24h)", "System Efficiency Trend"])
     
     if not master_df.empty:
         fig = go.Figure()
-        if "Usage" in chart_view:
-            # Replicating your GREEN reference image style
-            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['Daytime'], mode='lines', line_shape='spline', name='Daytime Use', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
-            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['Overnight'], mode='lines', line_shape='spline', name='Overnight Use', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
+        
+        if "Overlapping" in chart_view:
+            # SaaS Style "Green Chart" interpolation
+            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['Daytime'], mode='lines', line_shape='spline', name='Daytime', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['Overnight'], mode='lines', line_shape='spline', name='Overnight', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
         
         elif "LPCD" in chart_view:
-            master_df['lpcd_plot'] = (master_df['Total'] * 1000) / campus_pop
-            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['lpcd_plot'], mode='lines', line_shape='spline', name='Actual LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
-            fig.add_trace(go.Scatter(x=master_df['Date'], y=[target_lpcd]*len(master_df), name="WHO Target", line=dict(color="red", dash='dash')))
+            master_df['lpcd_plot'] = (master_df['Total_24h'] * 1000) / campus_pop
+            fig.add_trace(go.Scatter(x=master_df['Date'], y=master_df['lpcd_plot'], mode='lines', line_shape='spline', name='Daily LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.1)'))
+            fig.add_trace(go.Scatter(x=master_df['Date'], y=[target_lpcd]*len(master_df), name="Target", line=dict(color="red", dash='dash')))
 
-        # FOCUS HIGHLIGHT (Selected Day)
-        if total_val > 0:
-            y_focus = dt_val if "Usage" in chart_view else (total_val*1000/campus_pop)
-            fig.add_trace(go.Scatter(x=[selected_op_date], y=[y_focus], mode='markers', name="Selected Day", marker=dict(color='orange', size=15, line=dict(width=3, color='white'))))
+        # HIGH-END HIGHLIGHT (Bold point for selected date)
+        if tot_val > 0:
+            y_focus = dt_val if "Usage" in chart_view else (tot_val*1000/campus_pop)
+            fig.add_trace(go.Scatter(x=[selected_op_date], y=[y_focus], mode='markers+text', name="Selected", text=[f"{selected_op_date}"], textposition="top center", marker=dict(color='orange', size=15, line=dict(width=3, color='white'))))
 
         fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
@@ -169,7 +173,7 @@ with v_right:
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# Data Log View
+# Calculated Data Log
 st.divider()
-st.subheader("📋 Calculated Data Log")
+st.subheader("📋 Engineering Data Wrangling (Calculated from Raw Readings)")
 st.dataframe(master_df, use_container_width=True)
