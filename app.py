@@ -48,13 +48,16 @@ with st.sidebar:
     st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
         <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
         <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
-    </div>""", unsafe_allow_html=True)
+            </ul>
+        </div>
+    """, unsafe_allow_html=True)
 
-
-    
+    st.divider()
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
+
+
 
 # --- 3. THE "RAW READING" ENGINE ---
 raw_data = fetch_live_data()
