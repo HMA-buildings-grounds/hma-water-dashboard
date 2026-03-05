@@ -31,19 +31,23 @@ with st.sidebar:
     except:
         st.markdown("<h2 style='text-align:center;'>HMA WATER</h2>", unsafe_allow_html=True)
         
-    st.markdown("### Operational Controls")
-    pop = st.number_input("Campus Population", value=400, min_value=1)
-    target = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
-    sel_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
-    
-    st.divider()
-    st.markdown("### 📖 Standards & References")
-    st.markdown("• [WHO Water Standards](https://www.who.int/publications/i/item/9789241549950)")
-    st.markdown("• [Sphere Handbook Ch.6](https://handbook.spherestandards.org/en/sphere/#ch006)")
-    
-    if st.button("🔄 Sync Live Data"):
-        st.cache_data.clear()
-        st.rerun()
+
+
+st.markdown("### Operational Controls")
+campus_pop = st.number_input("Campus Population", value=250, min_value=1)
+target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
+
+# User selects date - Dashboard "cooks" data for this day
+selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
+
+st.divider()
+st.markdown("### 📖 Standards & References")
+st.markdown("• [WHO Water Standards](https://www.who.int/publications/i/item/9789241549950)")
+st.markdown("• [Sphere Handbook Ch.6](https://handbook.spherestandards.org/en/sphere/#ch006)")
+
+if st.button("🔄 Sync Live Data"):
+    st.cache_data.clear()
+    st.rerun()
 
 # --- 3. THE "RAW READING" ENGINE ---
 raw_json = get_data()
