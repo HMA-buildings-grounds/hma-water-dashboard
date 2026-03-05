@@ -10,7 +10,6 @@ from datetime import datetime
 # --- 1. SETTINGS & BRANDING ---
 st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
-# Custom UI Styling for SaaS Look
 st.markdown("""
     <style>
     .main { background-color: #F8FAFC; }
@@ -21,7 +20,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=5) # High frequency refresh for live logs
+@st.cache_data(ttl=2) # Near-instant refresh
 def fetch_live_data():
     try:
         api_url = st.secrets["google_sheets"]["api_url"]
@@ -37,10 +36,10 @@ with st.sidebar:
         st.title("HMA ACADEMY")
     
     st.markdown("### Operational Controls")
-    campus_pop = st.number_input("Campus Population", value=370, min_value=1)
+    campus_pop = st.number_input("Campus Population", value=250, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
     
-    # Calendar Input
+    # The Calendar
     selected_op_date = st.date_input("Operational Date", value=datetime.now())
     
     st.divider()
@@ -54,7 +53,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. DATA PROCESSING ---
+# --- 3. SMART DATA AGGREGATION ---
 raw_data = fetch_live_data()
 main_df = pd.DataFrame()
 prod_col, cons_col, date_col = None, None, None
@@ -72,22 +71,31 @@ for sheet_name, rows in raw_data.items():
             break
 
 if not main_df.empty:
-    # Fix: Ensure Date is datetime objects to prevent "Dots" on timeline
-    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce')
+    # 1. Clean Dates and convert to Date objects
+    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce').dt.date
+    # 2. Convert values to numeric
     main_df[prod_col] = pd.to_numeric(main_df[prod_col], errors='coerce').fillna(0)
     main_df[cons_col] = pd.to_numeric(main_df[cons_col], errors='coerce').fillna(0)
     
-    # Sort and remove empty rows to ensure a continuous line
-    daily_df = main_df[main_df[prod_col] > 0].sort_values(by=date_col).copy()
+    # 3. AGGREGATE BY DATE (This combines morning and afternoon rows)
+    # This ensures March 1 data is visible even if it's on a different row
+    daily_df = main_df.groupby(date_col).agg({prod_col: 'sum', cons_col: 'sum'}).reset_index()
+    daily_df = daily_df.sort_values(by=date_col)
     
-    # Fetch Specific Date Data
-    selected_dt = pd.to_datetime(selected_op_date)
-    row_data = daily_df[daily_df[date_col] == selected_dt]
+    # 4. Filter out empty dates
+    daily_df = daily_df[(daily_df[prod_col] > 0) | (daily_df[cons_col] > 0)]
     
-    if row_data.empty:
-        display_data = daily_df.iloc[-1] if not daily_df.empty else None
-    else:
+    # 5. Fetch Data for Selected Date
+    # We compare date object to date object
+    row_data = daily_df[daily_df[date_col] == selected_op_date]
+    
+    if not row_data.empty:
         display_data = row_data.iloc[0]
+        status_msg = f"Showing data for: {selected_op_date}"
+    else:
+        # If user selects a date with no data, show the latest available
+        display_data = daily_df.iloc[-1] if not daily_df.empty else None
+        status_msg = f"⚠️ No data for {selected_op_date}. Showing latest: {display_data[date_col] if display_data is not None else 'N/A'}"
 
 # --- 4. CALCULATIONS ---
 if display_data is not None:
@@ -97,59 +105,55 @@ if display_data is not None:
 else:
     p_val, c_val, lpcd, eff = 0, 0, 0, 0
 
-# Tooltips (Updated per request)
-lpcd_help = f"Calculation: (Total Consumption [{c_val} m³] × 1000) ÷ Population [{campus_pop}] = {lpcd:.1f} Liters per person per day."
-eff_help = f"Calculation: (Baseline Target [{target_lpcd} LPCD] ÷ Actual LPCD [{lpcd:.1f}]) × 100 = {eff:.1f}% Efficiency."
-prod_help = f"Calculation: Total cumulative volume extracted from well meter over 24 hours = {p_val} m³."
-
-# --- 5. PERFORMANCE DASHBOARD VIEW ---
+# --- 5. PERFORMANCE DASHBOARD ---
 st.title("Operational Diagnostics & Performance")
+st.caption(status_msg)
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
-k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_help)
-k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
+k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", 
+          help=f"Calculation: ({c_val} m³ x 1000) / {campus_pop} Population")
+k2.metric("System Efficiency", f"{eff:.1f}%", help=f"Calculation: ({target_lpcd} Target / {lpcd:.1f} Actual) x 100")
+k3.metric("Daily Production", f"{p_val:.1f} m³", help=f"Calculation: Total volume from well meter for this date.")
 
 st.divider()
 
 v_left, v_right = st.columns([2.2, 0.8])
 
 with v_left:
-    # REPLICATING THE "GREEN REFERENCE IMAGE" STYLE
     st.subheader("Operational Diagnostics Trend")
     
     if not daily_df.empty:
         daily_df['lpcd_calc'] = (daily_df[cons_col] * 1000) / campus_pop
         
-        # Create a professional Curved Area Chart (Spline)
         fig = go.Figure()
 
-        # 1. Background Trend (Blurred/Soft Color)
+        # Curved Area Trend (The "SaaS" Wave Style)
         fig.add_trace(go.Scatter(
             x=daily_df[date_col], y=daily_df['lpcd_calc'],
             mode='lines', line_shape='spline',
-            name='LPCD Trend', line=dict(width=4, color='rgba(13, 148, 136, 0.4)'),
+            name='LPCD Trend', line=dict(width=4, color='rgba(13, 148, 136, 0.6)'),
             fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
         ))
 
-        # 2. Baseline Target Line
+        # WHO Target Line
         fig.add_trace(go.Scatter(
             x=daily_df[date_col], y=[target_lpcd]*len(daily_df),
             name="WHO Target", line=dict(color="#1B263B", dash='dash', width=2)
         ))
 
-        # 3. Selected Date Point (Bold Marker)
+        # Selected Date Highlight (The Bold Point)
         if display_data is not None:
             fig.add_trace(go.Scatter(
                 x=[display_data[date_col]], y=[lpcd],
                 mode='markers+text', name="Selected Day",
-                text=[f"{lpcd:.1f} LPCD"], textposition="top center",
-                marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))
+                text=[f"{lpcd:.1f}"], textposition="top center",
+                marker=dict(color='#1B263B', size=14, line=dict(width=3, color='white'))
             ))
 
         fig.update_layout(
-            template="plotly_white", height=450,
-            xaxis=dict(showgrid=False), yaxis=dict(title="Liters per Capita"),
+            template="plotly_white", height=480,
+            xaxis=dict(showgrid=False, title="Timeline"), 
+            yaxis=dict(title="Liters per Capita"),
             margin=dict(l=0, r=0, t=20, b=0),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
