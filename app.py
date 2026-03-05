@@ -7,7 +7,7 @@ import requests
 from datetime import datetime, timedelta
 
 # --- 1. SETTINGS & BRANDING ---
-st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
+st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
 st.markdown("""
     <style>
