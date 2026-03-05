@@ -9,7 +9,6 @@ from datetime import datetime
 # --- 1. SETTINGS & CSS FIXES ---
 st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
 
-# Final CSS Polish to match the modern look
 st.markdown("""
     <style>
     .main { background-color: #F8FAFC; }
@@ -25,7 +24,8 @@ def fetch_live_data():
     try:
         api_url = st.secrets["google_sheets"]["api_url"]
         return requests.get(api_url).json()
-    except: return {}
+    except:
+        return {}
 
 # --- 2. SIDEBAR CONTROLS ---
 with st.sidebar:
@@ -40,78 +40,73 @@ with st.sidebar:
     sel_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
     
     st.divider()
-    st.markdown("### 📖 Standards & References")
-    st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
-        <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
-        <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
-    </div>""", unsafe_allow_html=True)
+    st.markdown("""
+        <div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
+            <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
+            <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
+        </div>
+    """, unsafe_allow_html=True)
 
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. THE ROBUST ENGINEERING ENGINE (Handles all months and raw math) ---
-def build_master_log(raw_data):
-    readings = []
-    for sheet_name, rows in raw_data.items():
-        df = pd.DataFrame(rows)
-        if df.empty: continue
-        
-        year_match = re.search(r'20\d{2}', sheet_name)
-        year = year_match.group(0) if year_match else "2026"
-        
-        df.columns =[str(c).strip() for c in df.columns]
-        
-        # Hardcoded column indices based on your shared raw structure
-        try:
-            for _, row in df.iterrows():
-                d_val = str(row.iloc[0]).strip()
-                t_val = str(row.iloc[1]).strip()
-                m_val = str(row.iloc[2]).strip()
-                
-                if not d_val or d_val.lower() in ['nan', 'date', '']: continue
-                if not m_val or not any(c.isdigit() for c in m_val): continue
-                
-                m_num = float(re.search(r"[-+]?\d*\.\d+|\d+", m_val).group())
-                
-                # Create timestamp, ensuring the correct year is used
-                d_str = f"{d_val} {year} {t_val}" if not re.search(r'20\d{2}', d_val) else f"{d_val} {t_val}"
-                ts = pd.to_datetime(d_str, errors='coerce')
-                
-                if pd.notnull(ts):
-                    is_morning = '8:00' in t_val or 'AM' in t_val.upper()
-                    readings.append({'Timestamp': ts, 'DateOnly': ts.date(), 'IsMorning': is_morning, 'Reading': m_num})
-        except: continue
+# --- 3. THE "RAW READING" ENGINE (Simplified for Stability) ---
+raw_data = fetch_live_data()
+readings =[]
+master = pd.DataFrame(columns=['Date', 'Overnight', 'Daytime', 'Total'])
 
-    if not readings: return pd.DataFrame()
+for sheet_name, rows in raw_data.items():
+    df = pd.DataFrame(rows)
+    if df.empty: continue
+    
+    year_match = re.search(r'20\d{2}', sheet_name)
+    year = year_match.group(0) if year_match else "2026"
+    
+    df.columns =[str(c).strip() for c in df.columns]
+    
+    try:
+        for _, row in df.iterrows():
+            d_val = str(row.iloc[0]).strip()
+            t_val = str(row.iloc[1]).strip()
+            m_val = str(row.iloc[2]).strip()
+            
+            if not d_val or d_val.lower() in ['nan', 'date', '']: continue
+            if not m_val or not any(c.isdigit() for c in m_val): continue
+            
+            m_num = float(re.search(r"[-+]?\d*\.\d+|\d+", m_val).group())
+            
+            d_str = f"{d_val} {year} {t_val}" if not re.search(r'20\d{2}', d_val) else f"{d_val} {t_val}"
+            ts = pd.to_datetime(d_str, errors='coerce')
+            
+            if pd.notnull(ts):
+                is_morning = '8:00' in t_val or 'AM' in t_val.upper()
+                readings.append({'Timestamp': ts, 'DateOnly': ts.date(), 'IsMorning': is_morning, 'Reading': m_num})
+    except: continue
 
-    # Sort and Calculate Usage (The Core Math)
+if readings:
     df_readings = pd.DataFrame(readings).sort_values('Timestamp').drop_duplicates('Timestamp').reset_index(drop=True)
     df_readings['Usage'] = df_readings['Reading'].diff().fillna(0)
     df_readings.loc[df_readings['Usage'] < 0, 'Usage'] = 0 
     
-    # Group into 24-Hour Daily Buckets
     daily_data =[]
     for d, g in df_readings.groupby('DateOnly'):
         dt_usage = g[~g['IsMorning']]['Usage'].sum()
         ov_usage = g[g['IsMorning']]['Usage'].sum()
-        daily_data.append({
-            'Date': pd.to_datetime(d), 
-            'Overnight': ov_usage, 
-            'Daytime': dt_usage, 
-            'Total': dt_usage + ov_usage
-        })
-    return pd.DataFrame(daily_data)
-
-master = build_master_log(raw_data)
+        daily_data.append({'Date': pd.to_datetime(d), 'Overnight': ov_usage, 'Daytime': dt_usage, 'Total': dt_usage + ov_usage})
+    master = pd.DataFrame(daily_data)
+else:
+    master = pd.DataFrame(columns=['Date', 'Overnight', 'Daytime', 'Total'])
 
 # --- 4. MATCHING THE CALENDAR ---
 ov_v, dt_v, tot_v, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
+
 if not master.empty:
     match = master[master['Date'].dt.date == selected_op_date]
     if not match.empty:
-        row = match.iloc[0]
-        ov_v, dt_v, tot_v = row['Overnight'], row['Daytime'], row['Total']
+        ov_v = match.iloc[0]['Overnight']
+        dt_v = match.iloc[0]['Daytime']
+        tot_v = match.iloc[0]['Total']
         lpcd = (tot_v * 1000) / campus_pop
         eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
 
@@ -137,8 +132,8 @@ with l_col:
     if not master.empty:
         fig = go.Figure()
         
+        # --- CHART STYLING ---
         if "Usage" in view:
-            # Green/Blue Overlapping Areas
             fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime Use', line=dict(width=3, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
             fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight Use', line=dict(width=3, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
         elif "LPCD" in view:
@@ -152,13 +147,13 @@ with l_col:
         # Highlight Selected Date Point
         if tot_v > 0:
             y_val = dt_v if "Usage" in view else (lpcd if "LPCD" in view else eff)
-            fig.add_trace(go.Scatter(x=[pd.to_datetime(sel_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{sel_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='orange', size=12, line=dict(width=2, color='white'))))
+            fig.add_trace(go.Scatter(x=[pd.to_datetime(sel_date)], y=[y_val], mode='markers+text', name="Selected Day", text=[f"{sel_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='orange', size=12, line=dict(width=2, color='white'))))
 
         fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
 
 with r_col:
-    # PROFESSIONAL GAUGE REDESIGN
+    # PROFESSIONAL GAUGE
     st.markdown("### Efficiency Status")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = eff,
@@ -171,10 +166,10 @@ with r_col:
             'steps':[
                 {'range': [0, 50], 'color': "#E74C3C"},   # Red
                 {'range': [50, 85], 'color': "#F39C12"},  # Yellow
-                {'range': [85, 100], 'color': "#1ABB9C"} # Green (Teal)
+                {'range': [85, 100], 'color': "#1ABB9C"} # Mint Green
             ],
-            'threshold': { # This creates the sleek needle effect
-                'line': {'color': "#1B263B", 'width': 8}, # Thick Black Needle
+            'threshold': {
+                'line': {'color': "#2A3F54", 'width': 8}, # Thick Dark Needle
                 'thickness': 0.85, 
                 'value': eff
             }
@@ -182,7 +177,7 @@ with r_col:
     fig_gauge.update_layout(height=380, margin=dict(l=20, r=20, t=30, b=10))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# --- 6. EXPORTS & VERIFICATION ---
+# --- 6. DOWNLOADS & VERIFICATION ---
 st.divider()
 st.subheader("📥 Data Download Center")
 if raw_data:
@@ -198,7 +193,7 @@ if raw_data:
 with st.expander("🛠️ View Calculated Background Math (Engineering Verification)"):
     if not master.empty:
         display_master = master.copy()
-        display_master['Date'] = pd.to_datetime(display_master['Date']).dt.strftime('%Y-%m-%d')
+        display_master['Date'] = display_master['Date'].dt.strftime('%Y-%m-%d')
         st.dataframe(display_master, use_container_width=True)
     else:
         st.info("No calculated data available.")
