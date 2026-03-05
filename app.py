@@ -44,19 +44,12 @@ with st.sidebar:
     selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
     
     st.divider()
-    
-    # REPLICATED STANDARDS & REFERENCES UI
-    st.markdown("""
-        <div style="margin-top: -10px;">
-            <h3 style="color: white; font-size: 18px; margin-bottom: 15px;">📖 Standards & References</h3>
-            <ul style="list-style-type: none; padding-left: 0; line-height: 2.2;">
-                <li><a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color: #85C1E9; text-decoration: none; font-size: 15px;">■ WHO Water Standards</a></li>
-                <li><a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color: #85C1E9; text-decoration: none; font-size: 15px;">🌍 Sphere Handbook Ch.6</a></li>
-            </ul>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### 📖 Standards & References")
+    st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
+        <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
+        <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
+    </div>""", unsafe_allow_html=True)
 
-    st.divider()
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
