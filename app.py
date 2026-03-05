@@ -36,11 +36,13 @@ with st.sidebar:
         st.title("HMA ACADEMY")
     
     st.markdown("### Operational Controls")
-    campus_pop = st.number_input("Campus Population", value=250, min_value=1)
+    campus_pop = st.number_input("Campus Population", value=370, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
     
-    # The Calendar
-    selected_op_date = st.date_input("Operational Date", value=datetime.now())
+    # CALENDAR SELECTION
+    selected_date = st.date_input("Operational Date", value=datetime.now())
+    # Convert selected date to string ID for exact matching
+    date_id = selected_date.strftime('%Y-%m-%d')
     
     st.divider()
     st.markdown("### 📖 Standards & References")
@@ -53,11 +55,12 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. SMART DATA AGGREGATION ---
+# --- 3. DATA PROCESSING ENGINE ---
 raw_data = fetch_live_data()
 main_df = pd.DataFrame()
 prod_col, cons_col, date_col = None, None, None
 
+# Find the valid data sheet
 for sheet_name, rows in raw_data.items():
     temp_df = pd.DataFrame(rows)
     if not temp_df.empty:
@@ -70,89 +73,89 @@ for sheet_name, rows in raw_data.items():
             prod_col, cons_col, date_col = p_match[0], c_match[0], d_match[0]
             break
 
+# Initialize display variables
+p_val, c_val, lpcd, eff = 0, 0, 0, 0
+daily_df = pd.DataFrame()
+
 if not main_df.empty:
-    # 1. Clean Dates and convert to Date objects
-    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce').dt.date
-    # 2. Convert values to numeric
+    # A. Normalize Dates in the DataFrame to 'YYYY-MM-DD' strings
+    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce')
+    main_df['date_str'] = main_df[date_col].dt.strftime('%Y-%m-%d')
+    
+    # B. Clean Numbers
     main_df[prod_col] = pd.to_numeric(main_df[prod_col], errors='coerce').fillna(0)
     main_df[cons_col] = pd.to_numeric(main_df[cons_col], errors='coerce').fillna(0)
     
-    # 3. AGGREGATE BY DATE (This combines morning and afternoon rows)
-    # This ensures March 1 data is visible even if it's on a different row
-    daily_df = main_df.groupby(date_col).agg({prod_col: 'sum', cons_col: 'sum'}).reset_index()
-    daily_df = daily_df.sort_values(by=date_col)
+    # C. Filter for "Daily Totals" (Rows where production is recorded)
+    daily_df = main_df[main_df[prod_col] > 0].sort_values(by=date_col).copy()
     
-    # 4. Filter out empty dates
-    daily_df = daily_df[(daily_df[prod_col] > 0) | (daily_df[cons_col] > 0)]
+    # D. MATCH DATA TO SELECTED DATE
+    selected_row = daily_df[daily_df['date_str'] == date_id]
     
-    # 5. Fetch Data for Selected Date
-    # We compare date object to date object
-    row_data = daily_df[daily_df[date_col] == selected_op_date]
-    
-    if not row_data.empty:
-        display_data = row_data.iloc[0]
-        status_msg = f"Showing data for: {selected_op_date}"
+    if not selected_row.empty:
+        match = selected_row.iloc[-1]
+        p_val, c_val = match[prod_col], match[cons_col]
+        lpcd = (c_val * 1000) / campus_pop
+        eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
     else:
-        # If user selects a date with no data, show the latest available
-        display_data = daily_df.iloc[-1] if not daily_df.empty else None
-        status_msg = f"⚠️ No data for {selected_op_date}. Showing latest: {display_data[date_col] if display_data is not None else 'N/A'}"
+        # If no data for selected date, show 0 to alert user data is missing
+        p_val, c_val, lpcd, eff = 0, 0, 0, 0
 
-# --- 4. CALCULATIONS ---
-if display_data is not None:
-    p_val, c_val = display_data[prod_col], display_data[cons_col]
-    lpcd = (c_val * 1000) / campus_pop
-    eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
-else:
-    p_val, c_val, lpcd, eff = 0, 0, 0, 0
+# --- 4. CALCULATION TOOLTIPS ---
+lpcd_help = f"Formula: (Consumption [{c_val} m³] × 1000) ÷ Pop [{campus_pop}] = {lpcd:.1f} LPCD."
+eff_help = f"Formula: (Target [{target_lpcd}] ÷ Actual [{lpcd:.1f}]) × 100 = {eff:.1f}%."
+prod_help = f"Formula: Total volume extracted from well meter for this specific date = {p_val} m³."
 
-# --- 5. PERFORMANCE DASHBOARD ---
+# --- 5. UI VIEW ---
 st.title("Operational Diagnostics & Performance")
-st.caption(status_msg)
+
+if p_val == 0 and not main_df.empty:
+    st.warning(f"⚠️ No production data found for {date_id} in the spreadsheet. Displaying 0.0.")
 
 k1, k2, k3 = st.columns(3)
-k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", 
-          help=f"Calculation: ({c_val} m³ x 1000) / {campus_pop} Population")
-k2.metric("System Efficiency", f"{eff:.1f}%", help=f"Calculation: ({target_lpcd} Target / {lpcd:.1f} Actual) x 100")
-k3.metric("Daily Production", f"{p_val:.1f} m³", help=f"Calculation: Total volume from well meter for this date.")
+k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
+k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_help)
+k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
 
 st.divider()
 
 v_left, v_right = st.columns([2.2, 0.8])
 
 with v_left:
-    st.subheader("Operational Diagnostics Trend")
+    st.subheader(f"Operational Diagnostics Trend (Viewing: {date_id})")
     
     if not daily_df.empty:
-        daily_df['lpcd_calc'] = (daily_df[cons_col] * 1000) / campus_pop
+        daily_df['lpcd_plot'] = (daily_df[cons_col] * 1000) / campus_pop
         
+        # Area Chart Construction (SaaS Style)
         fig = go.Figure()
 
-        # Curved Area Trend (The "SaaS" Wave Style)
+        # Full Trend Line (Smoothed Spline)
         fig.add_trace(go.Scatter(
-            x=daily_df[date_col], y=daily_df['lpcd_calc'],
+            x=daily_df[date_col], y=daily_df['lpcd_plot'],
             mode='lines', line_shape='spline',
-            name='LPCD Trend', line=dict(width=4, color='rgba(13, 148, 136, 0.6)'),
+            name='Historical LPCD', line=dict(width=4, color='rgba(13, 148, 136, 0.5)'),
             fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
         ))
 
-        # WHO Target Line
+        # WHO Baseline
         fig.add_trace(go.Scatter(
             x=daily_df[date_col], y=[target_lpcd]*len(daily_df),
             name="WHO Target", line=dict(color="#1B263B", dash='dash', width=2)
         ))
 
-        # Selected Date Highlight (The Bold Point)
-        if display_data is not None:
+        # Selected Day Highlighter
+        if p_val > 0:
             fig.add_trace(go.Scatter(
-                x=[display_data[date_col]], y=[lpcd],
+                x=[selected_date], y=[lpcd],
                 mode='markers+text', name="Selected Day",
-                text=[f"{lpcd:.1f}"], textposition="top center",
-                marker=dict(color='#1B263B', size=14, line=dict(width=3, color='white'))
+                text=[f"Current: {lpcd:.1f}"], textposition="top center",
+                marker=dict(color='#1B263B', size=18, line=dict(width=3, color='white'))
             ))
 
         fig.update_layout(
             template="plotly_white", height=480,
-            xaxis=dict(showgrid=False, title="Timeline"), 
+            xaxis=dict(showgrid=False, title="Timeline"),
             yaxis=dict(title="Liters per Capita"),
             margin=dict(l=0, r=0, t=20, b=0),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
