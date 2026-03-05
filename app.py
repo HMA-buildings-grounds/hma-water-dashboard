@@ -1,7 +1,5 @@
 import streamlit as st
-from streamlit_option_menu import option_menu
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import io
@@ -51,125 +49,128 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. THE "HUMAN-PROOF" DATA ENGINE ---
-def clean_usage_value(val):
-    """Extracts '44' from '44 (13259-13215)'"""
-    if pd.isna(val) or val == "": return 0.0
-    s = str(val).strip()
-    match = re.search(r"[-+]?\d*\.\d+|\d+", s)
-    return float(match.group()) if match else 0.0
+# --- 3. THE "RAW READING" ENGINE ---
+raw_json = get_data()
+readings =[]
 
-# FIX 1: Allow dynamic years instead of hardcoding 2026
-def parse_hma_date(date_str, year):
-    """Turns 'Mar 1' into YYYY-MM-DD based on sheet name"""
-    try:
-        s = str(date_str).strip()
-        if not s or s.lower() == 'nan': return None
-        if len(s.split()) == 2:
-            return pd.to_datetime(f"{s} {year}")
-        return pd.to_datetime(s)
-    except:
-        return None
-
-raw_data = fetch_live_data()
-all_months_data =[] # List to hold ALL sheets
-
-for sheet_name, rows in raw_data.items():
+for sheet_name, rows in raw_json.items():
     df = pd.DataFrame(rows)
     if df.empty: continue
     
-    # Extract the correct year from the tab name (e.g. "Sep 2025" -> "2025")
+    # 1. Safely find the Year for this sheet
     year_match = re.search(r'20\d{2}', sheet_name)
-    sheet_year = year_match.group(0) if year_match else "2026"
+    year = year_match.group(0) if year_match else "2026"
     
     df.columns =[str(c).strip() for c in df.columns]
+    d_col = next((c for c in df.columns if "Date" in c), None)
+    t_col = next((c for c in df.columns if "Time" in c), None)
+    m_col = next((c for c in df.columns if "Meter Reading" in c), None)
     
-    usage_col = next((c for c in df.columns if "Usage Since" in c), None)
-    date_col = next((c for c in df.columns if "Date" in c), None)
+    if d_col and t_col and m_col:
+        for _, row in df.iterrows():
+            d_val = str(row[d_col]).strip()
+            t_val = str(row[t_col]).strip()
+            m_val = str(row[m_col]).strip()
+            
+            if not d_val or d_val.lower() == 'nan': continue
+            if not m_val or not any(c.isdigit() for c in m_val): continue
+            
+            # 2. Extract only the raw digits from the Meter Reading column
+            try:
+                m_num = float(re.search(r"[-+]?\d*\.\d+|\d+", m_val).group())
+            except: continue
+            
+            # 3. Create a perfect continuous timestamp
+            d_str = f"{d_val} {year} {t_val}" if not re.search(r'20\d{2}', d_val) else f"{d_val} {t_val}"
+            
+            try:
+                ts = pd.to_datetime(d_str)
+                # Identify if this is the 8 AM (Morning) or 4 PM (Afternoon) reading
+                is_morning = True if 'AM' in t_val.upper() or '8:' in t_val else False
+                readings.append({'TS': ts, 'DateOnly': ts.date(), 'IsMorning': is_morning, 'Reading': m_num})
+            except: continue
+
+if readings:
+    # Sort all readings from Sep 2025 to Mar 2026 chronologically
+    df_readings = pd.DataFrame(readings).sort_values('TS').drop_duplicates('TS').reset_index(drop=True)
     
-    if usage_col and date_col:
-        df['CleanDate'] = df[date_col].apply(lambda x: parse_hma_date(x, sheet_year))
-        df = df.dropna(subset=['CleanDate'])
-        df['UsageValue'] = df[usage_col].apply(clean_usage_value)
+    # THE MATH: Subtract current reading from previous reading
+    df_readings['Usage'] = df_readings['Reading'].diff().fillna(0)
+    df_readings.loc[df_readings['Usage'] < 0, 'Usage'] = 0 # Ignore negative resets
+    
+    # 4. Group into 24-Hour daily totals
+    daily_data =[]
+    for d, g in df_readings.groupby('DateOnly'):
+        dt_usage = g[~g['IsMorning']]['Usage'].sum() # Afternoon row holds Daytime Usage
+        ov_usage = g[g['IsMorning']]['Usage'].sum()  # Morning row holds Overnight Usage
         
-        daily = df.groupby('CleanDate')['UsageValue'].sum().reset_index()
-        all_months_data.append(daily)
-
-# FIX 2: Combine ALL sheets together, instead of just taking the last one [-1]
-if all_months_data:
-    current_df = pd.concat(all_months_data).groupby('CleanDate')['UsageValue'].sum().reset_index()
-    current_df = current_df.sort_values('CleanDate')
+        daily_data.append({
+            'Date': pd.to_datetime(d), 
+            'Daytime': dt_usage, 
+            'Overnight': ov_usage, 
+            'Total': dt_usage + ov_usage
+        })
+    master = pd.DataFrame(daily_data)
 else:
-    current_df = pd.DataFrame()
+    master = pd.DataFrame()
 
-# --- 4. CALCULATION & HIGHLIGHTING ---
-p_val, lpcd, eff = 0.0, 0.0, 0.0
-if not current_df.empty:
-    target_dt = pd.to_datetime(selected_op_date)
-    match = current_df[current_df['CleanDate'] == target_dt]
-    
+# --- 4. MATCHING THE CALENDAR ---
+ov_v, dt_v, tot_v, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
+
+if not master.empty:
+    # Match the calendar date accurately
+    match = master[master['Date'].dt.date == sel_date]
     if not match.empty:
-        p_val = match.iloc[0]['UsageValue']
-        lpcd = (p_val * 1000) / campus_pop
-        eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
+        ov_v = match.iloc[0]['Overnight']
+        dt_v = match.iloc[0]['Daytime']
+        tot_v = match.iloc[0]['Total']
+        lpcd = (tot_v * 1000) / pop
+        eff = (target / lpcd * 100) if lpcd > 0 else 0
 
-# Tooltips
-prod_help = f"Calculation: Sum of 8:00 AM & 4:00 PM readings for {selected_op_date.strftime('%b %d')} = {p_val} m³."
-lpcd_help = f"Calculation: ({p_val} m³ × 1000) ÷ {campus_pop} People = {lpcd:.1f} LPCD."
-eff_help = f"Calculation: ({target_lpcd} Target ÷ {lpcd:.1f} Actual) × 100 = {eff:.1f}% Efficiency."
-
-# --- 5. VISUALIZATION ---
+# --- 5. DASHBOARD UI ---
 st.title("Operational Diagnostics & Performance")
 
-if p_val == 0 and not current_df.empty:
-    st.warning(f"⚠️ Data for {selected_op_date.strftime('%B %d, %Y')} is either missing or not yet synced from the spreadsheet.")
+if tot_v == 0 and not master.empty:
+    st.warning(f"⚠️ No meter reading data calculated for {sel_date.strftime('%B %d, %Y')}.")
 
-k1, k2, k3 = st.columns(3)
-k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
-k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_help)
-k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Overnight Usage", f"{ov_v:.1f} m³", help="Calculated from the 8:00 AM reading.")
+c2.metric("Daytime Usage", f"{dt_v:.1f} m³", help="Calculated from the 4:00 PM reading.")
+c3.metric("Total 24h Usage", f"{tot_v:.1f} m³", help="Total well production for this 24-hour period.")
+c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target:.1f} vs Target", delta_color="inverse", help=f"({tot_v} m³ × 1000) ÷ {pop} pop")
 
 st.divider()
 
-v_left, v_right = st.columns([2.2, 0.8])
+l_col, r_col = st.columns([2.2, 0.8])
 
-with v_left:
-    chart_view = st.selectbox("Select Performance View", ["Daily LPCD Index", "Production Trend (m³)", "Efficiency Status Trend"])
+with l_col:
+    view = st.selectbox("Select 24h Trend View",["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
     
-    if not current_df.empty:
-        current_df['lpcd_plot'] = (current_df['UsageValue'] * 1000) / campus_pop
-        current_df['eff_plot'] = (target_lpcd / current_df['lpcd_plot'] * 100).clip(upper=100)
-        
+    if not master.empty:
         fig = go.Figure()
         
-        y_data = 'lpcd_plot' if "LPCD" in chart_view else ('UsageValue' if "Production" in chart_view else 'eff_plot')
-        y_label = "Liters per Capita" if "LPCD" in chart_view else ("Cubic Meters" if "Production" in chart_view else "Efficiency %")
+        if "Usage" in view:
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime Use', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight Use', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
         
-        # Smooth SaaS Curved Area
-        fig.add_trace(go.Scatter(
-            x=current_df['CleanDate'], y=current_df[y_data],
-            mode='lines', line_shape='spline', name=chart_view,
-            line=dict(width=4, color='rgba(13, 148, 136, 0.6)'),
-            fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
-        ))
+        elif "LPCD" in view:
+            master['lpcd_p'] = (master['Total'] * 1000) / pop
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], mode='lines', line_shape='spline', name='24h LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=[target]*len(master), name="Baseline Target", line=dict(color="red", dash='dash')))
+        
+        else: # Efficiency
+            master['eff_p'] = (target / ((master['Total'] * 1000) / pop) * 100).clip(upper=100).fillna(0)
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['eff_p'], mode='lines', line_shape='spline', name='Efficiency %', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
 
-        # Target Line for LPCD
-        if "LPCD" in chart_view:
-            fig.add_trace(go.Scatter(x=current_df['CleanDate'], y=[target_lpcd]*len(current_df), name="WHO Target", line=dict(color="#1B263B", dash='dash')))
+        # Highlight Selected Date Point
+        if tot_v > 0:
+            y_val = dt_v if "Usage" in view else (lpcd if "LPCD" in view else eff)
+            fig.add_trace(go.Scatter(x=[pd.to_datetime(sel_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{sel_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='orange', size=15, line=dict(width=3, color='white'))))
 
-        # Highlight Selected Date
-        if p_val > 0:
-            fig.add_trace(go.Scatter(
-                x=[pd.to_datetime(selected_op_date)], y=[lpcd if "LPCD" in chart_view else (p_val if "Production" in chart_view else eff)],
-                mode='markers+text', name="Selected Day",
-                text=[f"Active Day"], textposition="top center",
-                marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))
-            ))
-
-        fig.update_layout(template="plotly_white", height=450, xaxis=dict(title="Timeline", showgrid=False), yaxis=dict(title=y_label), margin=dict(l=0,r=0,t=30,b=0))
+        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
 
-with v_right:
+with r_col:
     st.markdown("### Efficiency Status")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = eff,
@@ -177,6 +178,10 @@ with v_right:
                  'steps': [{'range':[0, 50], 'color': "#FFEBEE"}, {'range': [50, 85], 'color': "#FFF9C4"}, {'range': [85, 100], 'color': "#E8F5E9"}]}))
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
+
+st.divider()
+st.subheader("📋 Verification Data Log")
+st.dataframe(master, use_container_width=True)
 
 # Data Download Section
 st.divider()
@@ -191,6 +196,8 @@ if raw_data:
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         df_dl.to_excel(writer, index=False)
     c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel}.xlsx")
+
+
 
 # Developer Transparency Log (so you can see the math worked)
 with st.expander("🛠️ View Calculated Background Math (Engineering Verification)"):
