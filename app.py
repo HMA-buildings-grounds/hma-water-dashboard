@@ -24,30 +24,28 @@ def get_data():
         return requests.get(st.secrets["google_sheets"]["api_url"]).json()
     except: return {}
 
-# --- 2. SIDEBAR CONTROLS ---
+# --- 2. SIDEBAR: OPERATIONAL CONTROLS ---
 with st.sidebar:
     try:
         st.image("assets/HMA_logo_color.jpg", use_container_width=True)
     except:
-        st.markdown("<h2 style='text-align:center;'>HMA WATER</h2>", unsafe_allow_html=True)
-        
+        st.title("HMA ACADEMY")
+    
+    st.markdown("### Operational Controls")
+    campus_pop = st.number_input("Campus Population", value=370, min_value=1)
+    target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
+    selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
+    
+    st.divider()
+    st.markdown("### 📖 Standards & References")
+    st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
+        <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
+        <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
+    </div>""", unsafe_allow_html=True)
 
-
-st.markdown("### Operational Controls")
-campus_pop = st.number_input("Campus Population", value=250, min_value=1)
-target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
-
-# User selects date - Dashboard "cooks" data for this day
-selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
-
-st.divider()
-st.markdown("### 📖 Standards & References")
-st.markdown("• [WHO Water Standards](https://www.who.int/publications/i/item/9789241549950)")
-st.markdown("• [Sphere Handbook Ch.6](https://handbook.spherestandards.org/en/sphere/#ch006)")
-
-if st.button("🔄 Sync Live Data"):
-    st.cache_data.clear()
-    st.rerun()
+    if st.button("🔄 Sync Live Data"):
+        st.cache_data.clear()
+        st.rerun()
 
 # --- 3. THE "RAW READING" ENGINE ---
 raw_json = get_data()
