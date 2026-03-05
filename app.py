@@ -105,36 +105,81 @@ if not master.empty:
         lpcd = (tot_v * 1000) / campus_pop
         eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
 
-# --- 5. UI ---
+
+
+
+# --- 5. DASHBOARD UI ---
 st.title("Operational Diagnostics & Performance")
+
+if tot_v == 0 and not master.empty:
+    st.warning(f"⚠️ No meter reading data calculated for {sel_date.strftime('%B %d, %Y')}.")
+
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Overnight Usage", f"{ov_v:.1f} m³")
-c2.metric("Daytime Usage", f"{dt_v:.1f} m³")
-c3.metric("Total 24h Usage", f"{tot_v:.1f} m³")
-c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target_lpcd:.1f} vs Target")
+c1.metric("Overnight Usage", f"{ov_v:.1f} m³", help="Calculated from the 8:00 AM reading.")
+c2.metric("Daytime Usage", f"{dt_v:.1f} m³", help="Calculated from the 4:00 PM reading.")
+c3.metric("Total 24h Usage", f"{tot_v:.1f} m³", help="Total well production for this 24-hour period.")
+c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target:.1f} vs Target", delta_color="inverse", help=f"({tot_v} m³ × 1000) ÷ {pop} pop")
 
 st.divider()
-v_left, v_right = st.columns([2.2, 0.8])
 
-with v_left:
-    view = st.selectbox("Select Trend View", ["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
+l_col, r_col = st.columns([2.2, 0.8])
+
+with l_col:
+    view = st.selectbox("Select 24h Trend View",["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
+    
     if not master.empty:
         fig = go.Figure()
+        
         if "Usage" in view:
-            fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', name='Daytime', fill='tozeroy'))
-            fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', name='Overnight', fill='tozeroy'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime Use', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight Use', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
+        
         elif "LPCD" in view:
-            master['lpcd_p'] = (master['Total'] * 1000) / campus_pop
-            fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], name='24h LPCD'))
-            fig.add_trace(go.Scatter(x=master['Date'], y=[target_lpcd]*len(master), name="Target", line=dict(dash='dash')))
-        else:
-            master['eff_p'] = (target_lpcd / ((master['Total'] * 1000) / campus_pop) * 100).clip(upper=100)
-            fig.add_trace(go.Scatter(x=master['Date'], y=master['eff_p'], name='Efficiency %'))
+            master['lpcd_p'] = (master['Total'] * 1000) / pop
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], mode='lines', line_shape='spline', name='24h LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=[target]*len(master), name="Baseline Target", line=dict(color="red", dash='dash')))
+        
+        else: # Efficiency
+            master['eff_p'] = (target / ((master['Total'] * 1000) / pop) * 100).clip(upper=100).fillna(0)
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['eff_p'], mode='lines', line_shape='spline', name='Efficiency %', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
+
+        # Highlight Selected Date Point
+        if tot_v > 0:
+            y_val = dt_v if "Usage" in view else (lpcd if "LPCD" in view else eff)
+            fig.add_trace(go.Scatter(x=[pd.to_datetime(sel_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{sel_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='orange', size=15, line=dict(width=3, color='white'))))
+
+        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
 
-with v_right:
+with r_col:
     st.markdown("### Efficiency Status")
-    st.plotly_chart(go.Figure(go.Indicator(mode="gauge+number", value=eff, gauge={'axis':{'range':[0,100]}, 'steps':[{'range':[0,50], 'color':"#FFEBEE"}, {'range':[50,85], 'color':"#FFF9C4"}, {'range':[85,100], 'color':"#E8F5E9"}]})), use_container_width=True)
+    fig_gauge = go.Figure(go.Indicator(
+        mode = "gauge+number", value = eff,
+        gauge = {'axis': {'range':[0, 100]}, 'bar': {'color': "#1B263B"},
+                 'steps': [{'range':[0, 50], 'color': "#FFEBEE"}, {'range': [50, 85], 'color': "#FFF9C4"}, {'range': [85, 100], 'color': "#E8F5E9"}]}))
+    fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
+    st.plotly_chart(fig_gauge, use_container_width=True)
 
-with st.expander("🛠️ View Calculated Background Math"):
-    st.dataframe(master, use_container_width=True)
+st.divider()
+st.subheader("📋 Verification Data Log")
+st.dataframe(master, use_container_width=True)
+
+# Data Download Section
+st.divider()
+st.subheader("📥 Data Download Center")
+if raw_data:
+    # Use raw_data keys for the dropdown, so users select the actual original sheet names
+    sel = st.selectbox("Select Log for Download", list(raw_data.keys()))
+    df_dl = pd.DataFrame(raw_data[sel])
+    c1, c2 = st.columns(2)
+    c1.download_button("💾 Download CSV", df_dl.to_csv(index=False), f"{sel}.csv")
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        df_dl.to_excel(writer, index=False)
+    c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel}.xlsx")
+
+
+
+# Developer Transparency Log (so you can see the math worked)
+with st.expander("🛠️ View Calculated Background Math (Engineering Verification)"):
+    st.dataframe(master_df)
