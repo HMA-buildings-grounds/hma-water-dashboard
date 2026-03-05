@@ -1,176 +1,141 @@
 import streamlit as st
 from streamlit_option_menu import option_menu
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import io
-import re
 from datetime import datetime
 
-# --- 1. SETTINGS & BRANDING ---
-st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
+# --- 1. CONFIGURATION & UI ---
+st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
 
 st.markdown("""
     <style>
     .main { background-color: #F8FAFC; }
     [data-testid="stSidebar"] { background-color: #1B263B !important; }
     [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label { color: white !important; }
-    [data-testid="stMetricValue"] { color: #1B263B; font-size: 38px; font-weight: 800; }
-    .stMetric { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+    [data-testid="stMetricValue"] { color: #1B263B; font-size: 32px; font-weight: 800; }
+    .stMetric { background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=5)
-def fetch_live_data():
+@st.cache_data(ttl=2)
+def get_live_data():
     try:
-        api_url = st.secrets["google_sheets"]["api_url"]
-        return requests.get(api_url).json()
-    except:
-        return {}
+        url = st.secrets["google_sheets"]["api_url"]
+        return requests.get(url).json()
+    except: return {}
 
-# --- 2. SIDEBAR: OPERATIONAL CONTROLS ---
+# --- 2. SIDEBAR ---
 with st.sidebar:
-    try:
-        st.image("assets/HMA_logo_color.jpg", use_container_width=True)
-    except:
-        st.title("HMA ACADEMY")
-    
+    st.image("assets/HMA_logo_color.jpg", use_container_width=True)
     st.markdown("### Operational Controls")
-    campus_pop = st.number_input("Campus Population", value=370, min_value=1)
-    target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
-    selected_op_date = st.date_input("Operational Date", value=datetime.now())
+    pop = st.number_input("Campus Population", value=250)
+    target = st.number_input("Baseline Target (LPCD)", value=50)
+    sel_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
     
     st.divider()
-    st.markdown("### 📖 Standards & References")
-    st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
-        <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
-        <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
-    </div>""", unsafe_allow_html=True)
-
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. THE "HUMAN-PROOF" DATA ENGINE ---
-def clean_usage_value(val):
-    """Extracts '44' from '44 (13259-13215)'"""
-    if pd.isna(val) or val == "": return 0.0
-    s = str(val).strip()
-    # Find the first number (integer or decimal) in the string
-    match = re.search(r"[-+]?\d*\.\d+|\d+", s)
-    return float(match.group()) if match else 0.0
+# --- 3. THE "NO-FAIL" CALCULATION ENGINE ---
+raw_json = get_live_data()
+all_readings = []
 
-def parse_hma_date(date_str):
-    """Turns 'Mar 1' into 2026-03-01"""
-    try:
-        s = str(date_str).strip()
-        if not s or s.lower() == 'nan': return None
-        # Append year 2026 if it's missing
-        if len(s.split()) == 2:
-            return pd.to_datetime(f"{s} 2026", format='%b %d %Y')
-        return pd.to_datetime(s)
-    except:
-        return None
-
-raw_data = fetch_live_data()
-processed_sheets = {}
-
-for name, rows in raw_data.items():
+for sheet_name, rows in raw_json.items():
     df = pd.DataFrame(rows)
     if df.empty: continue
     
-    # 1. Clean Column Names
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    # 2. Find usage column (Usage Since Last Reading (m³))
-    usage_col = next((c for c in df.columns if "Usage Since" in c), None)
-    date_col = next((c for c in df.columns if "Date" in c), None)
-    
-    if usage_col and date_col:
-        # 3. Clean and Aggregate
-        df['CleanDate'] = df[date_col].apply(parse_hma_date)
-        df = df.dropna(subset=['CleanDate'])
-        df['UsageValue'] = df[usage_col].apply(clean_usage_value)
+    # We ignore column names and use POSITION
+    # Column 0 = Date | Column 1 = Time | Column 2 = Meter Reading
+    try:
+        # Extract the year from the sheet name (e.g., "Mar 2026")
+        year = "".join(filter(str.isdigit, sheet_name))
+        if not year: year = "2026"
         
-        # 4. Group by Day (Summing 8AM and 4PM entries)
-        daily = df.groupby('CleanDate')['UsageValue'].sum().reset_index()
-        daily = daily.sort_values('CleanDate')
-        processed_sheets[name] = daily
+        for _, row in df.iterrows():
+            d_val = str(row.iloc[0]).strip()
+            t_val = str(row.iloc[1]).strip()
+            r_val = str(row.iloc[2]).strip()
+            
+            # Only process if we have a reading
+            if r_val and r_val.replace('.','',1).isdigit():
+                # Combine Date + Year + Time
+                ts_str = f"{d_val} {year} {t_val}"
+                ts = pd.to_datetime(ts_str, errors='coerce')
+                if pd.notnull(ts):
+                    all_readings.append({'TS': ts, 'Time': t_val, 'Reading': float(r_val)})
+    except: continue
 
-# Get the most recent sheet data
-current_df = list(processed_sheets.values())[-1] if processed_sheets else pd.DataFrame()
-
-# --- 4. CALCULATION & HIGHLIGHTING ---
-p_val, lpcd, eff = 0.0, 0.0, 0.0
-if not current_df.empty:
-    # Match selected date
-    target_dt = pd.to_datetime(selected_op_date)
-    match = current_df[current_df['CleanDate'] == target_dt]
+if all_readings:
+    full = pd.DataFrame(all_readings).sort_values('TS').drop_duplicates('TS').reset_index(drop=True)
+    # Perform the subtraction between rows
+    full['Delta'] = full['Reading'].diff()
     
+    daily_results = []
+    for d, g in full.groupby(full['TS'].dt.date):
+        # 8:00 AM reading records the OVERNIGHT use
+        ov = g[g['Time'].str.contains('8:00', na=False)]['Delta'].sum()
+        # 4:00 PM reading records the DAYTIME use
+        dt = g[g['Time'].str.contains('4:00', na=False)]['Delta'].sum()
+        daily_results.append({'Date': d, 'Overnight': ov, 'Daytime': dt, 'Total': ov+dt})
+    
+    master = pd.DataFrame(daily_results)
+else:
+    master = pd.DataFrame(columns=['Date', 'Overnight', 'Daytime', 'Total'])
+
+# --- 4. KPI MATCHING ---
+ov_v, dt_v, tot_v, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
+if not master.empty:
+    match = master[master['Date'] == sel_date]
     if not match.empty:
-        p_val = match.iloc[0]['UsageValue'] # For this sheet, Usage = Production
-        lpcd = (p_val * 1000) / campus_pop
-        eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
+        res = match.iloc[0]
+        ov_v, dt_v, tot_v = res['Overnight'], res['Daytime'], res['Total']
+        lpcd = (tot_v * 1000) / pop
+        eff = (target / lpcd * 100) if lpcd > 0 else 0
 
-# Tooltips
-prod_help = f"Calculation: Sum of 8:00 AM & 4:00 PM readings for {selected_op_date.strftime('%b %d')} = {p_val} m³."
-lpcd_help = f"Calculation: ({p_val} m³ × 1000) ÷ {campus_pop} People = {lpcd:.1f} LPCD."
-eff_help = f"Calculation: ({target_lpcd} Target ÷ {lpcd:.1f} Actual) × 100 = {eff:.1f}% Efficiency."
-
-# --- 5. VISUALIZATION ---
+# --- 5. MAIN UI ---
 st.title("Operational Diagnostics & Performance")
 
-if p_val == 0:
-    st.warning(f"⚠️ Data for {selected_op_date.strftime('%B %d')} is either missing or not yet synced from the spreadsheet.")
+if tot_v == 0:
+    st.warning(f"No data for {sel_date}. Please select a date from the logs.")
 
-k1, k2, k3 = st.columns(3)
-k1.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd - target_lpcd:.1f} vs Target", delta_color="inverse", help=lpcd_help)
-k2.metric("System Efficiency", f"{eff:.1f}%", help=eff_help)
-k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
+# Metric Division
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Overnight Usage", f"{ov_v:.1f} m³", help="Calculated from 8:00 AM Reading")
+c2.metric("Daytime Usage", f"{dt_v:.1f} m³", help="Calculated from 4:00 PM Reading")
+c3.metric("Total 24h Usage", f"{tot_v:.1f} m³", help="Sum of Day + Night")
+c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target:.1f} vs Target", delta_color="inverse", help=f"({tot_v}m³ * 1000) / {pop} pop")
 
 st.divider()
 
-v_left, v_right = st.columns([2.2, 0.8])
+l_col, r_col = st.columns([2.2, 0.8])
 
-with v_left:
-    chart_view = st.selectbox("Select Performance View", ["Daily LPCD Index", "Production Trend (m³)", "Efficiency Status Trend"])
+with l_col:
+    # THE DROPDOWN IS BACK
+    view = st.selectbox("Select Trend View", ["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
+    fig = go.Figure()
     
-    if not current_df.empty:
-        current_df['lpcd_plot'] = (current_df['UsageValue'] * 1000) / campus_pop
-        current_df['eff_plot'] = (target_lpcd / current_df['lpcd_plot'] * 100).clip(upper=100)
+    if not master.empty:
+        if "Usage" in view:
+            # Overlapping Green/Blue Area Chart
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
+        elif "LPCD" in view:
+            master['lpcd_p'] = (master['Total'] * 1000) / pop
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], mode='lines', line_shape='spline', name='24h LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=[target]*len(master), name="Baseline", line=dict(color="red", dash='dash')))
         
-        fig = go.Figure()
-        
-        # Determine what to plot
-        y_data = 'lpcd_plot' if "LPCD" in chart_view else ('UsageValue' if "Production" in chart_view else 'eff_plot')
-        y_label = "Liters per Capita" if "LPCD" in chart_view else ("Cubic Meters" if "Production" in chart_view else "Efficiency %")
-        
-        # Smooth SaaS Curved Area
-        fig.add_trace(go.Scatter(
-            x=current_df['CleanDate'], y=current_df[y_data],
-            mode='lines', line_shape='spline', name=chart_view,
-            line=dict(width=4, color='rgba(13, 148, 136, 0.6)'),
-            fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
-        ))
+        # Highlight selected date
+        if tot_v > 0:
+            y_val = dt_v if "Usage" in view else (tot_v*1000/pop)
+            fig.add_trace(go.Scatter(x=[sel_date], y=[y_val], mode='markers', name="Focus", marker=dict(color='orange', size=15, line=dict(width=2, color='white'))))
 
-        # Target Line for LPCD
-        if "LPCD" in chart_view:
-            fig.add_trace(go.Scatter(x=current_df['CleanDate'], y=[target_lpcd]*len(current_df), name="WHO Target", line=dict(color="#1B263B", dash='dash')))
+    fig.update_layout(template="plotly_white", height=450, margin=dict(l=0,r=0,t=20,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    st.plotly_chart(fig, use_container_width=True)
 
-        # Highlight Selected Date
-        if p_val > 0:
-            fig.add_trace(go.Scatter(
-                x=[pd.to_datetime(selected_op_date)], y=[lpcd if "LPCD" in chart_view else (p_val if "Production" in chart_view else eff)],
-                mode='markers+text', name="Selected Day",
-                text=[f"Active Day"], textposition="top center",
-                marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))
-            ))
-
-        fig.update_layout(template="plotly_white", height=450, xaxis=dict(title="Timeline", showgrid=False), yaxis=dict(title=y_label), margin=dict(l=0,r=0,t=30,b=0))
-        st.plotly_chart(fig, use_container_width=True)
-
-with v_right:
+with r_col:
     st.markdown("### Efficiency Status")
     fig_gauge = go.Figure(go.Indicator(
         mode = "gauge+number", value = eff,
@@ -179,15 +144,6 @@ with v_right:
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# Data Download Section
 st.divider()
-st.subheader("📥 Data Download Center")
-if processed_sheets:
-    sel = st.selectbox("Select Log for Download", list(processed_sheets.keys()))
-    df_dl = pd.DataFrame(raw_data[sel])
-    c1, c2 = st.columns(2)
-    c1.download_button("💾 Download CSV", df_dl.to_csv(index=False), f"{sel}.csv")
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-        df_dl.to_excel(writer, index=False)
-    c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel}.xlsx")
+st.subheader("📋 Calculated Engineering Log")
+st.dataframe(master, use_container_width=True)
