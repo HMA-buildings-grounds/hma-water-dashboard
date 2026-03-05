@@ -6,23 +6,25 @@ import io
 import re
 from datetime import datetime
 
-# --- 1. SETTINGS & STYLING ---
-st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
+# --- 1. SETTINGS & BRANDING ---
+st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
 st.markdown("""
     <style>
     .main { background-color: #F8FAFC; }
-    [data-testid="stSidebar"] { background-color: #1B263B !important; }[data-testid="stSidebar"] * { color: white !important; }
-    [data-testid="stMetricValue"] { color: #1B263B; font-size: 34px; font-weight: 800; }
+    [data-testid="stSidebar"] { background-color: #1B263B !important; }
+    [data-testid="stSidebar"] .stMarkdown, [data-testid="stSidebar"] label { color: white !important; }[data-testid="stMetricValue"] { color: #1B263B; font-size: 38px; font-weight: 800; }
     .stMetric { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
     </style>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=2)
-def get_data():
+@st.cache_data(ttl=5)
+def fetch_live_data():
     try:
-        return requests.get(st.secrets["google_sheets"]["api_url"]).json()
-    except: return {}
+        api_url = st.secrets["google_sheets"]["api_url"]
+        return requests.get(api_url).json()
+    except:
+        return {}
 
 # --- 2. SIDEBAR: OPERATIONAL CONTROLS ---
 with st.sidebar:
