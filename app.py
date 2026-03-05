@@ -2,9 +2,10 @@ import streamlit as st
 from streamlit_option_menu import option_menu
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
 import requests
-from datetime import datetime, timedelta
+import io
+import re
+from datetime import datetime
 
 # --- 1. SETTINGS & BRANDING ---
 st.set_page_config(page_title="HMA Water Intelligence", layout="wide")
@@ -27,7 +28,11 @@ def get_raw_data():
 
 # --- 2. SIDEBAR CONTROLS ---
 with st.sidebar:
-    st.image("assets/HMA_logo_color.jpg", use_container_width=True)
+    try:
+        st.image("assets/HMA_logo_color.jpg", use_container_width=True)
+    except:
+        st.title("HMA ACADEMY")
+    
     st.markdown("### Operational Controls")
     pop = st.number_input("Campus Population", value=250)
     target = st.number_input("Baseline Target (LPCD)", value=50)
@@ -39,80 +44,111 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-# --- 3. THE CALCULATION ENGINE (8AM & 4PM LOGIC) ---
+# --- 3. THE ENGINEERING ENGINE ---
 raw_json = get_raw_data()
-all_data = []
 
-# Combine all sheets and fix dates
-for sheet in raw_json.values():
-    df = pd.DataFrame(sheet)
-    if not df.empty:
+def process_hma_data(json_input):
+    all_readings = []
+    
+    for sheet_name, rows in json_input.items():
+        df = pd.DataFrame(rows)
+        if df.empty: continue
+        
+        # Determine Year from sheet name (e.g. "Mar 2026")
+        year_match = re.search(r'20\d{2}', sheet_name)
+        year = year_match.group(0) if year_match else "2026"
+        
+        # Standardize columns
         df.columns = [str(c).strip() for c in df.columns]
         d_col = next((c for c in df.columns if "Date" in c), None)
         t_col = next((c for c in df.columns if "Time" in c), None)
-        r_col = next((c for c in df.columns if "Meter Reading" in c), None)
+        r_col = next((c for c in df.columns if "well" in c.lower() and "meter" in c.lower()), None)
+        
         if d_col and t_col and r_col:
-            df = df[[d_col, t_col, r_col]].copy()
-            df.columns = ['D', 'T', 'R']
-            # Convert "Mar 1" to real date
-            df['DT'] = pd.to_datetime(df['D'].astype(str) + " 2026 " + df['T'].astype(str), errors='coerce')
-            all_data.append(df.dropna())
+            temp = df[[d_col, t_col, r_col]].copy()
+            temp.columns = ['D', 'T', 'R']
+            # Create a real timestamp for sorting
+            temp['Timestamp'] = pd.to_datetime(temp['D'].astype(str) + " " + year + " " + temp['T'].astype(str), errors='coerce')
+            temp['Reading'] = pd.to_numeric(temp['R'], errors='coerce')
+            all_readings.append(temp.dropna(subset=['Timestamp', 'Reading']))
 
-if all_data:
-    full = pd.concat(all_data).sort_values('DT').drop_duplicates('DT').reset_index(drop=True)
-    full['Usage'] = full['R'].diff() # This is the magic subtraction
+    if not all_readings:
+        return pd.DataFrame(columns=['Date', 'Overnight', 'Daytime', 'Total'])
+
+    # Combine everything and sort by time
+    full_tape = pd.concat(all_readings).sort_values('Timestamp').drop_duplicates('Timestamp').reset_index(drop=True)
     
-    # Organize into 24-hr buckets
+    # Calculate difference between this reading and the previous one
+    full_tape['Usage'] = full_tape['Reading'].diff()
+    
+    # Split into Daily Buckets
     daily_stats = []
-    for d, g in full.groupby(full['DT'].dt.date):
-        # Overnight = Delta at 8AM row | Daytime = Delta at 4PM row
-        ov = g[g['T'].str.contains('8:00', na=False)]['Usage'].sum()
-        dt = g[g['T'].str.contains('4:00', na=False)]['Usage'].sum()
-        daily_stats.append({'Date': d, 'Overnight': ov, 'Daytime': dt, 'Total': ov+dt})
+    full_tape['DateOnly'] = full_tape['Timestamp'].dt.date
     
-    master = pd.DataFrame(daily_stats)
-else:
-    master = pd.DataFrame()
+    for d, g in full_tape.groupby('DateOnly'):
+        # Overnight: Usually recorded at 8:00 AM (Reading 8AM - Reading Prev 4PM)
+        ov = g[g['T'].astype(str).str.contains('8:00', na=False)]['Usage'].sum()
+        # Daytime: Recorded at 4:00 PM (Reading 4PM - Reading 8AM)
+        dt = g[g['T'].astype(str).str.contains('4:00', na=False)]['Usage'].sum()
+        
+        daily_stats.append({
+            'Date': d, 
+            'Overnight': ov if ov >= 0 else 0, 
+            'Daytime': dt if dt >= 0 else 0, 
+            'Total': (ov if ov >= 0 else 0) + (dt if dt >= 0 else 0)
+        })
+    
+    return pd.DataFrame(daily_stats)
 
-# --- 4. DISPLAY LOGIC ---
+master = process_hma_data(raw_json)
+
+# --- 4. CALCULATION & MATCHING ---
 ov_v, dt_v, tot_v, lpcd, eff = 0.0, 0.0, 0.0, 0.0, 0.0
 if not master.empty:
-    row = master[master['Date'] == sel_date]
-    if not row.empty:
-        ov_v, dt_v, tot_v = row.iloc[0]['Overnight'], row.iloc[0]['Daytime'], row.iloc[0]['Total']
+    match = master[master['Date'] == sel_date]
+    if not match.empty:
+        row = match.iloc[0]
+        ov_v, dt_v, tot_v = row['Overnight'], row['Daytime'], row['Total']
         lpcd = (tot_v * 1000) / pop
         eff = (target / lpcd * 100) if lpcd > 0 else 0
 
 # --- 5. UI LAYOUT ---
 st.title("Operational Diagnostics & Performance")
 
-# KPI Row
+# Handle cases where no data exists for selected date
+if tot_v == 0 and not master.empty:
+    st.warning(f"No meter data found for {sel_date}. Please select a date from the logs below.")
+
+# KPI Metrics
 c1, c2, c3, c4 = st.columns(4)
-c1.metric("Overnight Usage", f"{ov_v:.1f} m³", help="Today 8AM Reading - Yesterday 4PM Reading")
-c2.metric("Daytime Usage", f"{dt_v:.1f} m³", help="Today 4PM Reading - Today 8AM Reading")
-c3.metric("Total 24h Usage", f"{tot_v:.1f} m³", help="The aggregate of Daytime and Overnight usage.")
-c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target:.1f} vs Target", delta_color="inverse", help=f"({tot_v}m³ * 1000) / {pop} pop")
+c1.metric("Overnight Usage", f"{ov_v:.1f} m³", help="Subtracts previous 4PM reading from 8AM reading")
+c2.metric("Daytime Usage", f"{dt_v:.1f} m³", help="Subtracts 8AM reading from 4PM reading")
+c3.metric("Total 24h Usage", f"{tot_v:.1f} m³", help="Aggregate Daytime + Overnight")
+c4.metric("Current LPCD", f"{lpcd:.1f}", f"{lpcd-target:.1f} vs Target", delta_color="inverse")
 
 st.divider()
 
 col_left, col_right = st.columns([2.2, 0.8])
 
 with col_left:
-    view = st.selectbox("Select View", ["Usage Analysis (Day vs Night)", "LPCD Trend", "Efficiency Trend"])
+    view = st.selectbox("Select Trend View", ["Usage Analysis (Day vs Night)", "LPCD Performance Index", "Efficiency Status Trend"])
     fig = go.Figure()
     
-    if "Usage" in view:
-        # SMOOTH GREEN/BLUE OVERLAPPING AREA CHART
-        fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
-        fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
-    elif "LPCD" in view:
-        master['lpcd_p'] = (master['Total'] * 1000) / pop
-        fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], mode='lines', line_shape='spline', name='LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
-    
-    # Highlight Selected Date
-    if tot_v > 0:
-        fig.add_trace(go.Scatter(x=[sel_date], y=[dt_v if "Usage" in view else (tot_v*1000/pop)], mode='markers', name="Selected", marker=dict(color='orange', size=15, line=dict(width=2, color='white'))))
-    
+    if not master.empty:
+        if "Usage" in view:
+            # Replicating the "Green/Blue Overlapping Area" style
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Daytime'], mode='lines', line_shape='spline', name='Daytime', line=dict(width=4, color='#85C1E9'), fill='tozeroy', fillcolor='rgba(133, 193, 233, 0.2)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['Overnight'], mode='lines', line_shape='spline', name='Overnight', line=dict(width=4, color='#82E0AA'), fill='tozeroy', fillcolor='rgba(130, 224, 170, 0.2)'))
+        elif "LPCD" in view:
+            master['lpcd_p'] = (master['Total'] * 1000) / pop
+            fig.add_trace(go.Scatter(x=master['Date'], y=master['lpcd_p'], mode='lines', line_shape='spline', name='24h LPCD', line=dict(width=4, color='#1B263B'), fill='tozeroy', fillcolor='rgba(27, 38, 59, 0.05)'))
+            fig.add_trace(go.Scatter(x=master['Date'], y=[target]*len(master), name="Baseline Target", line=dict(color="red", dash='dash')))
+
+        # Focus Highlight for selected date
+        if tot_v > 0:
+            y_focus = dt_v if "Usage" in view else (tot_v*1000/pop)
+            fig.add_trace(go.Scatter(x=[sel_date], y=[y_focus], mode='markers', name="Selected Day", marker=dict(color='orange', size=15, line=dict(width=2, color='white'))))
+
     fig.update_layout(template="plotly_white", height=450, margin=dict(l=0,r=0,t=20,b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
     st.plotly_chart(fig, use_container_width=True)
 
@@ -125,13 +161,15 @@ with col_right:
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# EXPORTS
+# THE DATA WRANGLER LOG (To verify the math)
 st.divider()
-st.subheader("📥 Download Center")
-if not master.empty:
-    c_csv, c_xls = st.columns(2)
-    c_csv.download_button("💾 Download Data as CSV", master.to_csv(index=False), "HMA_Water_Data.csv")
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-        master.to_excel(writer, index=False)
-    c_xls.download_button("📂 Download Data as Excel", buffer.getvalue(), "HMA_Water_Data.xlsx")
+st.subheader("📋 Engineering Data Log (Calculated from Raw Meter)")
+st.dataframe(master, use_container_width=True)
+
+# DOWNLOADS
+c_csv, c_xls = st.columns(2)
+c_csv.download_button("💾 Download as CSV", master.to_csv(index=False), "HMA_Calculated_Data.csv")
+buffer = io.BytesIO()
+with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+    master.to_excel(writer, index=False)
+c_xls.download_button("📂 Download as Excel", buffer.getvalue(), "HMA_Calculated_Data.xlsx")
