@@ -15,7 +15,7 @@ st.markdown("""
     .main { background-color: #F8FAFC; }
     /* Sidebar Background & Text */
     [data-testid="stSidebar"] { background-color: #1B263B !important; }
-    [data-testid="stSidebar"] .stMarkdown,[data-testid="stSidebar"] label, [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h3 { color: white !important; }
+    [data-testid="stSidebar"] .stMarkdown,[data-testid="stSidebar"] label, [data-testid="stSidebar"] h1,[data-testid="stSidebar"] h3 { color: white !important; }
     /* Fix Input Boxes (Dark text on white background) */
     [data-testid="stSidebar"] input { color: #1B263B !important; background-color: white !important; border-radius: 5px; }
     /* KPI Metrics Styling */[data-testid="stMetricValue"] { color: #1B263B; font-size: 38px; font-weight: 800; }
@@ -45,10 +45,10 @@ with st.sidebar:
     
     st.divider()
     st.markdown("### 📖 Standards & References")
-    st.markdown("""<div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
-        <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
-        <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
-            </ul>
+    st.markdown("""
+        <div style="background:rgba(255,255,255,0.1); padding:10px; border-radius:8px;">
+            <a href="https://www.who.int/publications/i/item/9789241549950" target="_blank" style="color:#85C1E9; text-decoration:none;">📘 WHO Water Standards</a><br><br>
+            <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
         </div>
     """, unsafe_allow_html=True)
 
@@ -57,9 +57,8 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
-
-
 # --- 3. THE "RAW READING" ENGINE ---
+# FIX: Calling the correct function name here!
 raw_data = fetch_live_data()
 readings =[]
 
@@ -150,7 +149,7 @@ st.divider()
 l_col, r_col = st.columns([2.2, 0.8])
 
 with l_col:
-    view = st.selectbox("Select 24h Trend View",["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
+    view = st.selectbox("Select 24h Trend View", ["Usage Analysis (Day vs Night)", "Total LPCD Index", "Efficiency Trend"])
     
     if not master.empty:
         fig = go.Figure()
@@ -171,32 +170,38 @@ with l_col:
         # Highlight Selected Date Point
         if tot_v > 0:
             y_val = dt_v if "Usage" in view else (lpcd if "LPCD" in view else eff)
-            fig.add_trace(go.Scatter(x=[pd.to_datetime(selected_op_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{selected_op_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='orange', size=15, line=dict(width=3, color='white'))))
+            fig.add_trace(go.Scatter(x=[pd.to_datetime(selected_op_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{selected_op_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))))
 
-        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), xaxis=dict(showgrid=False))
         st.plotly_chart(fig, use_container_width=True)
 
 with r_col:
-    # RESTORED PROFESSIONAL PASTEL GAUGE
+    # UPGRADED PROFESSIONAL NEEDLE GAUGE
     st.markdown("### Efficiency Status")
     fig_gauge = go.Figure(go.Indicator(
-        mode = "gauge+number", value = eff,
+        mode = "gauge+number", 
+        value = eff,
         gauge = {
             'axis': {'range':[0, 100], 'tickwidth': 1, 'tickcolor': "darkblue"},
-            'bar': {'color': "#1B263B", 'thickness': 0.25},
+            'bar': {'color': "rgba(0,0,0,0)"}, # Hides the ugly thick block
             'bgcolor': "white",
             'borderwidth': 1,
             'bordercolor': "#e2e8f0",
-            'steps': [
+            'steps':[
                 {'range': [0, 50], 'color': "#FADBD8"},  # Soft Red
                 {'range': [50, 85], 'color': "#FCF3CF"}, # Soft Yellow
                 {'range': [85, 100], 'color': "#D5F5E3"} # Soft Green
-            ]
+            ],
+            'threshold': { # This creates the sleek needle effect
+                'line': {'color': "#1B263B", 'width': 6},
+                'thickness': 0.9,
+                'value': eff
+            }
         }))
     fig_gauge.update_layout(height=400, margin=dict(l=20,r=20,t=50,b=20))
     st.plotly_chart(fig_gauge, use_container_width=True)
 
-# --- 6. DATA EXPORTS & VERIFICATION ---
+# Data Download Section
 st.divider()
 st.subheader("📥 Data Download Center")
 if raw_data:
@@ -209,12 +214,11 @@ if raw_data:
         df_dl.to_excel(writer, index=False)
     c2.download_button("📂 Download Excel", buf.getvalue(), f"{sel_sheet}.xlsx")
 
-# THE DEVELOPER TRANSPARENCY LOG (No 00:00:00)
+# THE DEVELOPER TRANSPARENCY LOG (With correct variable name and clean dates)
 with st.expander("🛠️ View Calculated Background Math (Engineering Verification)"):
     if not master.empty:
         display_master = master.copy()
-        # Formats the date cleanly
-        display_master['Date'] = display_master['Date'].dt.strftime('%Y-%m-%d')
+        display_master['Date'] = pd.to_datetime(display_master['Date']).dt.strftime('%Y-%m-%d')
         st.dataframe(display_master, use_container_width=True)
     else:
         st.info("No data calculated yet.")
