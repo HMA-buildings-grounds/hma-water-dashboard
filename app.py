@@ -39,7 +39,7 @@ with st.sidebar:
     st.divider()
     st.markdown("### 📖 Standards & References")
     st.markdown("• [WHO Water Standards](https://www.who.int/publications/i/item/9789241549950)")
-    st.markdown("•[Sphere Handbook Ch.6](https://handbook.spherestandards.org/en/sphere/#ch006)")
+    st.markdown("• [Sphere Handbook Ch.6](https://handbook.spherestandards.org/en/sphere/#ch006)")
     
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
