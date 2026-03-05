@@ -10,7 +10,7 @@ from datetime import datetime
 # --- 1. SETTINGS & BRANDING ---
 st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout="wide")
 
-# Custom UI Styling
+# Custom UI Styling for SaaS Look
 st.markdown("""
     <style>
     .main { background-color: #F8FAFC; }
@@ -21,7 +21,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5) # High frequency refresh for live logs
 def fetch_live_data():
     try:
         api_url = st.secrets["google_sheets"]["api_url"]
@@ -40,7 +40,7 @@ with st.sidebar:
     campus_pop = st.number_input("Campus Population", value=370, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
     
-    # Restored Operational Date Calendar
+    # Calendar Input
     selected_op_date = st.date_input("Operational Date", value=datetime.now())
     
     st.divider()
@@ -64,7 +64,7 @@ for sheet_name, rows in raw_data.items():
     if not temp_df.empty:
         cols_norm = {c: "".join(str(c).lower().split()) for c in temp_df.columns}
         p_match = [orig for orig, norm in cols_norm.items() if "wellproduction" in norm]
-        c_match = [orig for orig, norm in cols_norm.items() if "consumption" in norm]
+        c_match = [orig for orig, norm in cols_norm.items() if "facilityconsumption" in norm]
         d_match = [orig for orig, norm in cols_norm.items() if "date" in norm]
         if p_match and c_match and d_match:
             main_df = temp_df
@@ -72,20 +72,24 @@ for sheet_name, rows in raw_data.items():
             break
 
 if not main_df.empty:
-    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce').dt.date
+    # Fix: Ensure Date is datetime objects to prevent "Dots" on timeline
+    main_df[date_col] = pd.to_datetime(main_df[date_col], errors='coerce')
     main_df[prod_col] = pd.to_numeric(main_df[prod_col], errors='coerce').fillna(0)
     main_df[cons_col] = pd.to_numeric(main_df[cons_col], errors='coerce').fillna(0)
+    
+    # Sort and remove empty rows to ensure a continuous line
     daily_df = main_df[main_df[prod_col] > 0].sort_values(by=date_col).copy()
     
-    # Logic to find the specific selected date data
-    row_data = daily_df[daily_df[date_col] == selected_op_date]
+    # Fetch Specific Date Data
+    selected_dt = pd.to_datetime(selected_op_date)
+    row_data = daily_df[daily_df[date_col] == selected_dt]
+    
     if row_data.empty:
-        # Fallback to latest if date not found
         display_data = daily_df.iloc[-1] if not daily_df.empty else None
     else:
         display_data = row_data.iloc[0]
 
-# --- 4. CALCULATION METHODOLOGY ---
+# --- 4. CALCULATIONS ---
 if display_data is not None:
     p_val, c_val = display_data[prod_col], display_data[cons_col]
     lpcd = (c_val * 1000) / campus_pop
@@ -93,10 +97,10 @@ if display_data is not None:
 else:
     p_val, c_val, lpcd, eff = 0, 0, 0, 0
 
-# Tooltip Calculation Text
+# Tooltips (Updated per request)
 lpcd_help = f"Calculation: (Total Consumption [{c_val} m³] × 1000) ÷ Population [{campus_pop}] = {lpcd:.1f} Liters per person per day."
 eff_help = f"Calculation: (Baseline Target [{target_lpcd} LPCD] ÷ Actual LPCD [{lpcd:.1f}]) × 100 = {eff:.1f}% Efficiency."
-prod_help = f"Calculation: Total cumulative volume extracted from all well meters over 24 hours = {p_val} m³."
+prod_help = f"Calculation: Total cumulative volume extracted from well meter over 24 hours = {p_val} m³."
 
 # --- 5. PERFORMANCE DASHBOARD VIEW ---
 st.title("Operational Diagnostics & Performance")
@@ -108,33 +112,47 @@ k3.metric("Daily Production", f"{p_val:.1f} m³", help=prod_help)
 
 st.divider()
 
-v_left, v_right = st.columns([2, 1])
+v_left, v_right = st.columns([2.2, 0.8])
 
 with v_left:
-    view = st.selectbox("Select Performance View", ["Daily LPCD Index", "Volume Comparison", "Efficiency Trend"])
+    # REPLICATING THE "GREEN REFERENCE IMAGE" STYLE
+    st.subheader("Operational Diagnostics Trend")
     
     if not daily_df.empty:
         daily_df['lpcd_calc'] = (daily_df[cons_col] * 1000) / campus_pop
         
-        if "LPCD" in view:
-            # Base Area Chart
-            fig = px.area(daily_df, x=date_col, y="lpcd_calc", 
-                          title=f"Liters Per Capita Per Day - Highlighted: {selected_op_date}",
-                          color_discrete_sequence=["#85C1E9"], template="plotly_white")
-            fig.add_scatter(x=daily_df[date_col], y=[target_lpcd]*len(daily_df), name="WHO Target", line=dict(color="#1B263B", dash='dash'))
-            
-            # Highlight Selected Date Point
-            if display_data is not None:
-                fig.add_trace(go.Scatter(x=[selected_op_date], y=[lpcd], mode='markers', 
-                                         marker=dict(color='#1B263B', size=15, line=dict(width=2, color='white')),
-                                         name="Selected Date"))
+        # Create a professional Curved Area Chart (Spline)
+        fig = go.Figure()
 
-        elif "Volume" in view:
-            fig = px.bar(daily_df, x=date_col, y=[prod_col, cons_col], barmode="group",
-                         title="Volume Analytics (m³)",
-                         color_discrete_map={prod_col: "#1B263B", cons_col: "#85C1E9"}, template="plotly_white")
-        
-        fig.update_layout(height=400, margin=dict(l=0,r=0,t=40,b=0))
+        # 1. Background Trend (Blurred/Soft Color)
+        fig.add_trace(go.Scatter(
+            x=daily_df[date_col], y=daily_df['lpcd_calc'],
+            mode='lines', line_shape='spline',
+            name='LPCD Trend', line=dict(width=4, color='rgba(13, 148, 136, 0.4)'),
+            fill='tozeroy', fillcolor='rgba(13, 148, 136, 0.1)'
+        ))
+
+        # 2. Baseline Target Line
+        fig.add_trace(go.Scatter(
+            x=daily_df[date_col], y=[target_lpcd]*len(daily_df),
+            name="WHO Target", line=dict(color="#1B263B", dash='dash', width=2)
+        ))
+
+        # 3. Selected Date Point (Bold Marker)
+        if display_data is not None:
+            fig.add_trace(go.Scatter(
+                x=[display_data[date_col]], y=[lpcd],
+                mode='markers+text', name="Selected Day",
+                text=[f"{lpcd:.1f} LPCD"], textposition="top center",
+                marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))
+            ))
+
+        fig.update_layout(
+            template="plotly_white", height=450,
+            xaxis=dict(showgrid=False), yaxis=dict(title="Liters per Capita"),
+            margin=dict(l=0, r=0, t=20, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
         st.plotly_chart(fig, use_container_width=True)
 
 with v_right:
