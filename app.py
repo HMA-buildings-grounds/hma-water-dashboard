@@ -172,7 +172,7 @@ with l_col:
             y_val = dt_v if "Usage" in view else (lpcd if "LPCD" in view else eff)
             fig.add_trace(go.Scatter(x=[pd.to_datetime(selected_op_date)], y=[y_val], mode='markers+text', name="Selected Date", text=[f"{selected_op_date.strftime('%b %d')}"], textposition="top center", marker=dict(color='#1B263B', size=15, line=dict(width=3, color='white'))))
 
-        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1), xaxis=dict(showgrid=False))
+        fig.update_layout(template="plotly_white", height=450, margin=dict(l=0, r=0, t=20, b=0), legend=dict(orientation="h", yanchor="middle", y=1.02, xanchor="right", x=1), xaxis=dict(showgrid=False))
         st.plotly_chart(fig, use_container_width=True)
 
 with r_col:
