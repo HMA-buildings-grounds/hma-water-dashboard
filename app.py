@@ -11,9 +11,14 @@ st.set_page_config(page_title="HMA Water Intelligence", page_icon="💧", layout
 
 st.markdown("""
     <style>
-    .main { background-color: #F8FAFC; }
+    /* Sidebar Navigation - Navy Blue */
     [data-testid="stSidebar"] { background-color: #1B263B !important; }
     [data-testid="stSidebar"] * { color: white !important; }
+    
+    /* Main Content */
+    .main { background-color: #F8FAFC; }
+    
+    /* Metrics */
     [data-testid="stMetricValue"] { color: #1B263B; font-size: 38px; font-weight: 800; }
     .stMetric { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
     </style>
@@ -27,14 +32,17 @@ def fetch_live_data():
     except:
         return {}
 
-# --- 2. SIDEBAR CONTROLS ---
+# --- 2. SIDEBAR ---
 with st.sidebar:
-    st.markdown("<h2 style='text-align:center; color:#1ABB9C;'>HMA WATER</h2>", unsafe_allow_html=True)
+    try:
+        st.image("assets/HMA_logo_color.jpg", use_container_width=True)
+    except:
+        st.markdown("<h2 style='text-align:center; color:#1ABB9C;'>HMA WATER</h2>", unsafe_allow_html=True)
+    
     campus_pop = st.number_input("Campus Population", value=370, min_value=1)
     target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
     selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 5))
     
-    st.divider()
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
@@ -48,10 +56,8 @@ if raw_data:
     for sheet_name, rows in raw_data.items():
         df = pd.DataFrame(rows)
         if df.empty: continue
-        
-        # Cleanup
         df.columns = [str(c).strip() for c in df.columns]
-        df.iloc[:, 0] = df.iloc[:, 0].ffill() # Fixes missing date cells
+        df.iloc[:, 0] = df.iloc[:, 0].ffill() # Fixes missing afternoon dates
         
         try:
             d_col = next((c for c in df.columns if "Date" in c), df.columns[0])
@@ -67,11 +73,15 @@ if raw_data:
                 if not m_val or not any(c.isdigit() for c in m_val): continue
                 
                 m_num = float(re.search(r"[-+]?\d*\.\d+|\d+", m_val).group())
-                
-                # Create timestamp
                 ts = pd.to_datetime(f"{d_val} 2026 {t_val}", errors='coerce')
+                
                 if pd.notnull(ts):
-                    readings.append({'TS': ts, 'DateOnly': ts.date(), 'IsMorning': '8:00' in t_val, 'Reading': m_num})
+                    readings.append({
+                        'TS': ts, 
+                        'DateOnly': ts.date(), 
+                        'IsMorning': '8:00' in t_val, 
+                        'Reading': m_num
+                    })
         except: continue
 
     if readings:
@@ -81,9 +91,9 @@ if raw_data:
         
         daily_data = []
         for d, g in df_readings.groupby('DateOnly'):
-            dt_usage = g[~g['IsMorning']]['Usage'].sum()
-            ov_usage = g[g['IsMorning']]['Usage'].sum()
-            daily_data.append({'Date': pd.to_datetime(d), 'Daytime': dt_usage, 'Overnight': ov_usage, 'Total': dt_usage + ov_usage})
+            dt = g[~g['IsMorning']]['Usage'].sum()
+            ov = g[g['IsMorning']]['Usage'].sum()
+            daily_data.append({'Date': pd.to_datetime(d), 'Daytime': dt, 'Overnight': ov, 'Total': dt + ov})
         master = pd.DataFrame(daily_data)
 
 # --- 4. MATCHING THE CALENDAR ---
@@ -95,7 +105,7 @@ if not master.empty:
         lpcd = (tot_v * 1000) / campus_pop
         eff = (target_lpcd / lpcd * 100) if lpcd > 0 else 0
 
-# --- 5. DASHBOARD UI ---
+# --- 5. UI ---
 st.title("Operational Diagnostics & Performance")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Overnight Usage", f"{ov_v:.1f} m³")
