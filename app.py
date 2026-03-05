@@ -50,6 +50,8 @@ with st.sidebar:
         <a href="https://handbook.spherestandards.org/en/sphere/#ch006" target="_blank" style="color:#85C1E9; text-decoration:none;">🌍 Sphere Handbook Ch.6</a>
     </div>""", unsafe_allow_html=True)
 
+
+    
     if st.button("🔄 Sync Live Data"):
         st.cache_data.clear()
         st.rerun()
