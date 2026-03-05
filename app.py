@@ -57,88 +57,65 @@ with st.sidebar:
         st.cache_data.clear()
         st.rerun()
 
+
 # --- 3. THE "RAW READING" ENGINE ---
 raw_data = fetch_live_data()
 readings = []
 
+if not raw_data:
+    st.error("DEBUG: raw_data is empty. Check your API/Google Sheets connection.")
+
 for sheet_name, rows in raw_data.items():
     df = pd.DataFrame(rows)
-    if df.empty: continue
+    if df.empty: 
+        st.write(f"DEBUG: Sheet {sheet_name} is empty.")
+        continue
     
-    # FIX: Ensure "Date" is not empty for afternoon rows (fills Mar 5 down to the empty afternoon row)
+    # 1. Clean headers and forward fill
+    df.columns = [str(c).strip() for c in df.columns]
     df.iloc[:, 0] = df.iloc[:, 0].ffill()
     
-    # Clean up column names for safe indexing
-    df.columns = [str(c).strip() for c in df.columns]
+    # DEBUG: Show us what columns the code sees
+    # st.write(f"DEBUG: Found columns: {list(df.columns)}") 
     
-    # DYNAMIC SEARCH: Find columns by header name, not hard-coded indices
     try:
-        # These match your Google Sheet headers EXACTLY
         idx_date = df.columns.get_loc('Date')
         idx_time = df.columns.get_loc('Time')
         idx_meter = df.columns.get_loc('Water well Meter Reading (m³)')
         
-        for _, row in df.iterrows():
+        for i, row in df.iterrows():
             d_val = str(row.iloc[idx_date]).strip()
             t_val = str(row.iloc[idx_time]).strip()
             m_val = str(row.iloc[idx_meter]).strip()
             
-            # Skip rows where date is missing or meter reading is empty/non-numeric
+            # DEBUG: Uncomment this to see if the loop is even finding data
+            # st.write(f"DEBUG Row {i}: {d_val} | {t_val} | {m_val}")
+            
             if not d_val or d_val.lower() in ['nan', 'date', '']: continue
             if not m_val or not any(c.isdigit() for c in m_val): continue
             
-            # Extract raw digits from the Meter Reading column
             m_num_match = re.search(r"[-+]?\d*\.\d+|\d+", m_val)
             if not m_num_match: continue
             m_num = float(m_num_match.group())
             
-            # Extract Year from sheet name
-            year_match = re.search(r'20\d{2}', sheet_name)
-            year = year_match.group(0) if year_match else "2026"
+            # --- DATE PARSING FIX ---
+            # Try to handle common date formats
+            try:
+                # Add current year if not present
+                d_str = f"{d_val} 2026 {t_val}" 
+                ts = pd.to_datetime(d_str)
+            except:
+                continue
+                
+            is_morning = '8:00' in t_val
+            readings.append({'Timestamp': ts, 'DateOnly': ts.date(), 'IsMorning': is_morning, 'Reading': m_num})
             
-            # Combine to create a proper Timestamp
-            d_str = f"{d_val} {year} {t_val}"
-            ts = pd.to_datetime(d_str, errors='coerce')
-            
-            if pd.notnull(ts):
-                # Identify if 8:00 AM (Morning) or 4:00 PM (Afternoon)
-                is_morning = '8:00' in t_val
-                readings.append({
-                    'Timestamp': ts, 
-                    'DateOnly': ts.date(), 
-                    'IsMorning': is_morning, 
-                    'Reading': m_num
-                })
-    except KeyError as e:
-        st.warning(f"Skipping sheet '{sheet_name}': Could not find column {e}. Check headers.")
-        continue
     except Exception as e:
+        st.error(f"DEBUG: Error in sheet {sheet_name}: {e}")
         continue
 
-# --- AGGREGATION & MATH ---
-if readings:
-    df_readings = pd.DataFrame(readings).sort_values('Timestamp').drop_duplicates('Timestamp').reset_index(drop=True)
-    
-    # Calculate Usage (Diff)
-    df_readings['Usage'] = df_readings['Reading'].diff().fillna(0)
-    # Reset negative values to 0 (to ignore meter rollovers)
-    df_readings.loc[df_readings['Usage'] < 0, 'Usage'] = 0 
-    
-    # Group into Daily Totals
-    daily_data = []
-    for d, g in df_readings.groupby('DateOnly'):
-        dt_usage = g[~g['IsMorning']]['Usage'].sum() 
-        ov_usage = g[g['IsMorning']]['Usage'].sum()  
-        
-        daily_data.append({
-            'Date': pd.to_datetime(d), 
-            'Overnight': ov_usage, 
-            'Daytime': dt_usage, 
-            'Total': dt_usage + ov_usage
-        })
-    master = pd.DataFrame(daily_data)
-else:
-    master = pd.DataFrame(columns=['Date', 'Overnight', 'Daytime', 'Total'])
+
+
 
 
 # --- 4. MATCHING THE CALENDAR ---
