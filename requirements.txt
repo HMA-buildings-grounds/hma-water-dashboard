@@ -1,7 +1,7 @@
 streamlit
+streamlit-option-menu  # For the professional sidebar
 pandas
-numpy
 plotly
 sqlalchemy
-pymysql
-cryptography
+mysql-connector-python
+gspread # To read "Every Sheet" from Google Sheets
