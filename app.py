@@ -40,7 +40,7 @@ with st.sidebar:
     
     st.markdown("### Operational Controls")
     campus_pop = st.number_input("Campus Population", value=370, min_value=1)
-    target_lpcd = st.number_input("Baseline Target (LPCD)", value=50, min_value=35, max_value=100)
+    target_lpcd = st.number_input("Baseline Target (LPCD)", value=35, min_value=35, max_value=100)
     selected_op_date = st.date_input("Operational Date", value=datetime(2026, 3, 1))
     
     st.divider()
