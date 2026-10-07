@@ -1,9 +1,5 @@
 streamlit
-streamlit-option-menu
 pandas
 plotly
-mysql-connector-python
-sqlalchemy
-gspread
-google-auth
+requests
 xlsxwriter
